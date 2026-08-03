@@ -1,0 +1,11 @@
+config/local_settings.conf
+.env
+# Google service-account credentials and other local secrets.
+*.service-account.json
+tactile-anthem-500905-k4-1d034f6fea55.json
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+.pyinstaller/
