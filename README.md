@@ -4,6 +4,27 @@ Desktop application for an international school multimedia workflow.
 
 ## Run
 
+### Native macOS interface (SwiftUI)
+
+The new macOS interface is a native SwiftUI application. It uses the existing
+Python services through `backend_bridge.py`; it does not duplicate the media,
+metadata, or folder logic in Swift.
+
+```bash
+ECC_BACKEND_ROOT="$PWD" ECC_PYTHON="$PWD/.venv/bin/python" swift run --package-path swiftui
+```
+
+`ECC_PYTHON` must point to the Python environment that has the project's
+requirements installed. The Swift package targets macOS 14 or later.
+
+To build the native executable without launching it:
+
+```bash
+swift build --package-path swiftui
+```
+
+### Legacy Tkinter interface
+
 ```bash
 python3 main.py
 ```
@@ -25,7 +46,7 @@ it:
 python3 create_staff_drive_events.py /path/to/events/2025-26 /path/to/archive/2025-2026
 ```
 
-## Build a macOS App
+## Build the legacy Tkinter macOS App
 
 From the project folder, install the app and build dependencies into the virtual
 environment, then run the build script:
@@ -83,7 +104,8 @@ python3 main.py
 
 ## Current Features
 
-- Tkinter desktop window with tabbed navigation
+- Native dark-mode SwiftUI desktop window with sidebar navigation
+- Swift-to-Python JSON bridge that preserves the existing Python backend
 - Import tab for event name, description, keywords, and grade selections
 - Editable event date and school year fields
 - Event folder creation under the configured event root
