@@ -1,8 +1,10 @@
+import AppKit
 import SwiftUI
 
 @main
 struct EventControlCenterApp: App {
     @StateObject private var appState = AppState()
+    @NSApplicationDelegateAdaptor(EventControlCenterDelegate.self) private var appDelegate
 
     var body: some Scene {
         WindowGroup("Event Control Center") {
@@ -14,6 +16,23 @@ struct EventControlCenterApp: App {
         }
         .defaultSize(width: 1280, height: 820)
         .windowResizability(.contentMinSize)
+    }
+}
+
+final class EventControlCenterDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        return true
     }
 }
 
@@ -59,10 +78,56 @@ final class AppState: ObservableObject {
         return result
     }
 
-    func importMedia(_ payload: ImportMediaPayload) async -> ImportOutcome? {
-        var result: ImportOutcome?
+    func availableSources() async -> [ImportSourceInfo] {
+        guard let client else { return [] }
+        do {
+            let result: ImportSourcesResponse = try await client.request(
+                "available_sources",
+                payload: EmptyPayload()
+            )
+            return result.sources
+        } catch {
+            return []
+        }
+    }
+
+    func importMedia(
+        _ payload: ImportMediaPayload,
+        onProgress: @escaping (ImportStreamEvent) -> Void
+    ) async -> ImportOutcome? {
+        guard let client else {
+            errorMessage = "The Python backend is unavailable. Set ECC_BACKEND_ROOT and ECC_PYTHON, then restart the app."
+            return nil
+        }
+
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            let events = try client.importEvents(payload: payload)
+            var outcome: ImportOutcome?
+            for try await event in events {
+                onProgress(event)
+                if event.type == "error" {
+                    throw BackendError.failed(event.error ?? "The import could not be completed.")
+                }
+                if event.type == "completed" {
+                    outcome = event.outcome
+                }
+            }
+            guard let outcome else {
+                throw BackendError.failed("The import stopped before returning a summary.")
+            }
+            return outcome
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    func cleanupImportedMedia(_ payload: SourceCleanupPayload) async -> SourceCleanupResult? {
+        var result: SourceCleanupResult?
         await perform(showSuccess: false) {
-            result = try await self.request("import_media", payload: payload)
+            result = try await self.request("cleanup_imported_media", payload: payload)
         }
         return result
     }
@@ -102,6 +167,15 @@ final class AppState: ObservableObject {
         return result
     }
 
+    func syncGoogleSheets(root: String) async -> GoogleSheetsSyncResult? {
+        struct Payload: Codable { let eventRoot: String }
+        var result: GoogleSheetsSyncResult?
+        await perform(showSuccess: false) {
+            result = try await self.request("sync_google_sheets", payload: Payload(eventRoot: root))
+        }
+        return result
+    }
+
     private func request<Payload: Encodable, Result: Decodable>(
         _ command: String,
         payload: Payload
@@ -111,6 +185,7 @@ final class AppState: ObservableObject {
         }
         return try await client.request(command, payload: payload)
     }
+
 
     private func perform(showSuccess: Bool, _ operation: @escaping () async throws -> Void) async {
         isWorking = true

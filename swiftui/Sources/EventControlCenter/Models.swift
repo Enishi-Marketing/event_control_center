@@ -65,6 +65,8 @@ struct MediaSessionInfo: Codable, Identifiable {
     let photoCount: Int
     let videoCount: Int
     let fileCount: Int
+    let startThumbnail: String?
+    let endThumbnail: String?
 
     var id: Int { index }
 }
@@ -76,6 +78,18 @@ struct MediaScan: Codable {
     let skippedCount: Int
     let failures: [String]
     let sessions: [MediaSessionInfo]
+}
+
+struct ImportSourceInfo: Codable, Identifiable, Hashable {
+    let name: String
+    let path: String
+    let isRemovable: Bool
+
+    var id: String { path }
+}
+
+struct ImportSourcesResponse: Codable {
+    let sources: [ImportSourceInfo]
 }
 
 struct ImportMediaPayload: Codable {
@@ -93,6 +107,35 @@ struct ImportOutcome: Codable {
     let failed: Int
     let jpgsGenerated: Int
     let failures: [String]
+    let importedSources: [String]
+}
+
+struct ImportStreamEvent: Codable {
+    let type: String
+    let current: Int?
+    let total: Int?
+    let currentFile: String?
+    let message: String?
+    let currentBytes: Int?
+    let totalBytes: Int?
+    let bytesPerSecond: Double?
+    let phase: String?
+    let overallCompleted: Double?
+    let overallTotal: Double?
+    let outcome: ImportOutcome?
+    let error: String?
+}
+
+struct SourceCleanupPayload: Codable {
+    let source: String
+    let files: [String]
+}
+
+struct SourceCleanupResult: Codable {
+    let deleted: Int
+    let deleteFailures: [String]
+    let ejected: Bool
+    let ejectMessage: String
 }
 
 struct SearchIndex: Codable {
@@ -140,6 +183,14 @@ struct CountResult: Codable {
     let found: Int
     let updated: Int
     let unchanged: Int
+    let failed: Int
+    let failures: [String]
+}
+
+struct GoogleSheetsSyncResult: Codable {
+    let found: Int
+    let synced: Int
+    let partial: Int
     let failed: Int
     let failures: [String]
 }

@@ -87,6 +87,57 @@ struct BackendClient {
         }.value
     }
 
+    func importEvents(
+        payload: ImportMediaPayload
+    ) throws -> AsyncThrowingStream<ImportStreamEvent, Error> {
+        let request = Request(command: "import_media_stream", payload: payload)
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let body = try encoder.encode(request)
+
+        return AsyncThrowingStream { continuation in
+            Task.detached(priority: .userInitiated) {
+                let process = Process()
+                process.executableURL = pythonURL
+                process.arguments = [rootURL.appendingPathComponent("backend_bridge.py").path]
+                process.currentDirectoryURL = rootURL
+
+                let input = Pipe()
+                let output = Pipe()
+                let errors = Pipe()
+                process.standardInput = input
+                process.standardOutput = output
+                process.standardError = errors
+
+                do {
+                    try process.run()
+                    input.fileHandleForWriting.write(body)
+                    try? input.fileHandleForWriting.close()
+
+                    let decoder = JSONDecoder()
+                    decoder.keyDecodingStrategy = .convertFromSnakeCase
+                    for try await line in output.fileHandleForReading.bytes.lines {
+                        guard let data = line.data(using: .utf8) else { continue }
+                        let event = try decoder.decode(ImportStreamEvent.self, from: data)
+                        continuation.yield(event)
+                    }
+                    process.waitUntilExit()
+                    if process.terminationStatus != 0 {
+                        let message = String(
+                            data: errors.fileHandleForReading.readDataToEndOfFile(),
+                            encoding: .utf8
+                        ) ?? "Import process stopped unexpectedly."
+                        continuation.finish(throwing: BackendError.failed(message))
+                    } else {
+                        continuation.finish()
+                    }
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
     private struct Request<Payload: Encodable>: Encodable {
         let command: String
         let payload: Payload

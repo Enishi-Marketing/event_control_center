@@ -65,7 +65,11 @@ private struct Card<Content: View>: View {
         content
             .padding(20)
             .background(Color(nsColor: .windowBackgroundColor).opacity(0.72), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.08)))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(.white.opacity(0.08))
+                    .allowsHitTesting(false)
+            )
     }
 }
 
@@ -80,9 +84,16 @@ struct ImportView: View {
     @State private var selectedGrades: Set<String> = []
     @State private var currentFolder: String?
     @State private var sourcePath = ""
+    @State private var detectedSources: [ImportSourceInfo] = []
+    @State private var selectedDetectedSourcePath = ""
     @State private var sessionGap = 20
     @State private var scan: MediaScan?
+    @State private var isScanning = false
     @State private var selectedSessions: Set<Int> = []
+    @State private var isImporting = false
+    @State private var importProgress: ImportStreamEvent?
+    @State private var importStartedAt: Date?
+    @State private var pendingSourceCleanup: ImportOutcome?
     @State private var choosingSource = false
     @State private var replaceExisting = false
 
@@ -99,6 +110,7 @@ struct ImportView: View {
                 PageHeader(title: "Import media", subtitle: "Prepare an event, review camera sessions, and bring in verified files.")
                 eventCard
                 sourceCard
+                if isScanning { MediaScanProgressPanel() }
                 if let scan { scanCard(scan) }
                 if let folder = currentFolder {
                     Label("Event folder ready: \(folder)", systemImage: "checkmark.circle.fill")
@@ -113,6 +125,26 @@ struct ImportView: View {
         }
         .onChange(of: app.configuration?.defaultSchoolYear) { _, year in
             if schoolYear.isEmpty { schoolYear = year ?? "" }
+        }
+        .task { await monitorRemovableMedia() }
+        .alert(
+            "Delete verified imported media and eject the card?",
+            isPresented: Binding(
+                get: { pendingSourceCleanup != nil },
+                set: { if !$0 { pendingSourceCleanup = nil } }
+            )
+        ) {
+            Button("Keep media", role: .cancel) { pendingSourceCleanup = nil }
+            Button("Delete and eject", role: .destructive) {
+                Task { await cleanUpImportedMedia() }
+            }
+        } message: {
+            let imported = pendingSourceCleanup?.importedSources.count ?? 0
+            let failed = pendingSourceCleanup?.failed ?? 0
+            Text(
+                "Only the \(imported) file(s) copied and verified during this import will be deleted."
+                    + (failed > 0 ? " \(failed) failed file(s) will stay on the card." : "")
+            )
         }
     }
 
@@ -170,6 +202,22 @@ struct ImportView: View {
         Card {
             VStack(alignment: .leading, spacing: 14) {
                 Label("Import source", systemImage: "externaldrive.fill").font(.headline)
+                if detectedSources.isEmpty {
+                    Text("Watching for an SD card or other removable media…")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Picker("Detected media", selection: $selectedDetectedSourcePath) {
+                        Text("Select detected media").tag("")
+                        ForEach(detectedSources) { source in
+                            Text(source.name).tag(source.path)
+                        }
+                    }
+                    .onChange(of: selectedDetectedSourcePath) { _, path in
+                        guard !path.isEmpty else { return }
+                        sourcePath = path
+                        scan = nil
+                    }
+                }
                 HStack {
                     Text(sourcePath.isEmpty ? "Choose an SD card or media folder." : sourcePath).lineLimit(1).foregroundStyle(sourcePath.isEmpty ? .secondary : .primary)
                     Spacer()
@@ -179,7 +227,7 @@ struct ImportView: View {
                     Stepper("Session gap: \(sessionGap) minutes", value: $sessionGap, in: 1...120).frame(maxWidth: 260)
                     Spacer()
                     Button { Task { await scanMedia() } } label: { Label("Scan media", systemImage: "viewfinder") }
-                        .buttonStyle(.bordered).disabled(sourcePath.isEmpty || app.isWorking)
+                        .buttonStyle(.bordered).disabled(sourcePath.isEmpty || app.isWorking || isScanning)
                 }
             }
         }
@@ -196,12 +244,18 @@ struct ImportView: View {
                 ForEach(scan.sessions) { session in
                     SessionRow(session: session, selectedSessions: $selectedSessions)
                 }
+                if isImporting {
+                    ImportProgressPanel(
+                        progress: importProgress,
+                        startedAt: importStartedAt ?? Date()
+                    )
+                }
                 HStack {
                     Button("Select all") { selectedSessions = Set(scan.sessions.map(\.index)) }.buttonStyle(.link)
                     Button("Select none") { selectedSessions = [] }.buttonStyle(.link)
                     Spacer()
                     Button { Task { await importSelected() } } label: { Label("Import selected media", systemImage: "square.and.arrow.down.fill") }
-                        .buttonStyle(.borderedProminent).disabled(currentFolder == nil || selectedSessions.isEmpty || app.isWorking)
+                        .buttonStyle(.borderedProminent).disabled(currentFolder == nil || selectedSessions.isEmpty || app.isWorking || isImporting)
                 }
                 if currentFolder == nil { Text("Create the event first to enable importing.").font(.caption).foregroundStyle(.orange) }
             }
@@ -218,19 +272,198 @@ struct ImportView: View {
     }
 
     private func scanMedia() async {
+        guard !isScanning, !sourcePath.isEmpty else { return }
+        isScanning = true
+        defer { isScanning = false }
         if let value = await app.scan(source: sourcePath, gap: sessionGap) {
             scan = value; selectedSessions = Set(value.sessions.map(\.index))
+        }
+    }
+
+    private func monitorRemovableMedia() async {
+        while !Task.isCancelled {
+            let sources = await app.availableSources()
+            let previousPaths = Set(detectedSources.map(\.path))
+            detectedSources = sources
+
+            let selectedSourceStillAvailable = sources.contains {
+                $0.path == selectedDetectedSourcePath
+            }
+            if let firstSource = sources.first,
+               sourcePath.isEmpty || (!selectedDetectedSourcePath.isEmpty && !selectedSourceStillAvailable) {
+                sourcePath = firstSource.path
+                selectedDetectedSourcePath = firstSource.path
+                scan = nil
+                if !previousPaths.contains(firstSource.path) {
+                    app.notice = "Detected \(firstSource.name). Ready to scan media."
+                    if !isImporting && !isScanning {
+                        Task { await scanMedia() }
+                    }
+                }
+            }
+
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
     }
 
     private func importSelected() async {
         guard let currentFolder else { return }
         let payload = ImportMediaPayload(source: sourcePath, eventFolder: currentFolder, sessionGapMinutes: sessionGap, sessionIndexes: selectedSessions.sorted(), eventName: eventName)
-        if let outcome = await app.importMedia(payload) {
+        isImporting = true
+        importStartedAt = Date()
+        importProgress = ImportStreamEvent(
+            type: "progress",
+            current: 0,
+            total: selectedSessions.count,
+            currentFile: nil,
+            message: "Preparing import…",
+            currentBytes: 0,
+            totalBytes: 0,
+            bytesPerSecond: 0,
+            phase: "Preparing",
+            overallCompleted: 0,
+            overallTotal: Double(selectedSessions.count),
+            outcome: nil,
+            error: nil
+        )
+        defer { isImporting = false }
+        if let outcome = await app.importMedia(payload, onProgress: { event in
+            importProgress = event
+        }) {
             app.notice = "Imported \(outcome.photosImported) photos and \(outcome.videosImported) videos. Generated \(outcome.jpgsGenerated) JPGs."
+            if !outcome.importedSources.isEmpty {
+                pendingSourceCleanup = outcome
+            }
         }
     }
 
+    private func cleanUpImportedMedia() async {
+        guard let outcome = pendingSourceCleanup else { return }
+        pendingSourceCleanup = nil
+        let cleanup = SourceCleanupPayload(source: sourcePath, files: outcome.importedSources)
+        if let result = await app.cleanupImportedMedia(cleanup) {
+            if result.ejected {
+                app.notice = "Deleted \(result.deleted) verified file(s) and ejected the card."
+                sourcePath = ""
+                selectedDetectedSourcePath = ""
+                scan = nil
+            } else {
+                let message = result.ejectMessage.isEmpty ? "The source was not ejected." : result.ejectMessage
+                app.notice = "Deleted \(result.deleted) verified file(s). \(message)"
+            }
+        }
+    }
+
+}
+
+private struct MediaScanProgressPanel: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            ProgressView().controlSize(.small)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Scanning media").fontWeight(.semibold)
+                ProgressView().tint(.cyan)
+                Text("Reading the card and grouping files into capture sessions…")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .background(.cyan.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.cyan.opacity(0.3))
+                .allowsHitTesting(false)
+        )
+    }
+}
+
+private struct ImportProgressPanel: View {
+    let progress: ImportStreamEvent?
+    let startedAt: Date
+
+    private var current: Int { progress?.current ?? 0 }
+    private var total: Int { max(progress?.total ?? 0, 1) }
+    private var overallValue: Double {
+        if let completed = progress?.overallCompleted,
+           let total = progress?.overallTotal,
+           total > 0 {
+            return min(max(completed / total, 0), 1)
+        }
+        let completedFiles = Double(max(current - 1, 0))
+        let currentFilePortion = currentFileValue
+            ?? (progress?.phase == "Generating previews" ? 1 : 0)
+        return min(max((completedFiles + currentFilePortion) / Double(total), 0), 1)
+    }
+    private var currentFileValue: Double? {
+        guard let copied = progress?.currentBytes,
+              let size = progress?.totalBytes,
+              size > 0 else { return nil }
+        return min(max(Double(copied) / Double(size), 0), 1)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(progress?.phase?.isEmpty == false ? progress?.phase ?? "Importing" : "Importing media")
+                    .fontWeight(.semibold)
+                Spacer()
+                Text(remainingTimeText).monospacedDigit().foregroundStyle(.secondary)
+            }
+            ProgressView(value: overallValue)
+                .tint(.cyan)
+            HStack {
+                Text("\(min(current, total)) of \(total) files")
+                Spacer()
+                if let speed = progress?.bytesPerSecond, speed > 0 {
+                    Text("\(ByteCountFormatter.string(fromByteCount: Int64(speed), countStyle: .file))/s")
+                }
+            }
+            .font(.caption).foregroundStyle(.secondary)
+            if let currentFileValue {
+                ProgressView(value: currentFileValue).tint(.blue)
+                HStack {
+                    Text(progress?.currentFile.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Copying file")
+                        .lineLimit(1)
+                    Spacer()
+                    Text(fileProgressText).monospacedDigit()
+                }
+                .font(.caption).foregroundStyle(.secondary)
+            } else if let message = progress?.message, !message.isEmpty {
+                Text(message).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .background(.cyan.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.cyan.opacity(0.3))
+                .allowsHitTesting(false)
+        )
+    }
+
+    private var fileProgressText: String {
+        guard let copied = progress?.currentBytes, let size = progress?.totalBytes else { return "" }
+        return "\(ByteCountFormatter.string(fromByteCount: Int64(copied), countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))"
+    }
+
+    private var remainingTimeText: String {
+        let fractionalFile = currentFileValue ?? 0
+        let completed = Double(max(current - 1, 0)) + fractionalFile
+        guard completed > 0.02 else { return "Estimating…" }
+        let elapsed = Date().timeIntervalSince(startedAt)
+        let remaining = elapsed / completed * (Double(total) - completed)
+        guard remaining.isFinite, remaining > 1 else { return "Almost done" }
+        return "About \(durationText(remaining)) left"
+    }
+
+    private func durationText(_ interval: TimeInterval) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = interval >= 3600 ? [.hour, .minute] : [.minute, .second]
+        formatter.unitsStyle = .abbreviated
+        formatter.zeroFormattingBehavior = .dropAll
+        return formatter.string(from: interval) ?? "a moment"
+    }
 }
 
 private struct SessionRow: View {
@@ -248,10 +481,20 @@ private struct SessionRow: View {
                 }
             }
         )) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Session \(session.index)").fontWeight(.semibold)
-                Text("\(time(session.startTime))–\(time(session.endTime)) · \(session.photoCount) photos · \(session.videoCount) videos")
-                    .font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                HStack(spacing: 6) {
+                    if let thumbnail = session.startThumbnail {
+                        ThumbnailPreview(path: thumbnail)
+                    }
+                    if let thumbnail = session.endThumbnail, thumbnail != session.startThumbnail {
+                        ThumbnailPreview(path: thumbnail)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Session \(session.index)").fontWeight(.semibold)
+                    Text("\(time(session.startTime))–\(time(session.endTime)) · \(session.photoCount) photos · \(session.videoCount) videos")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
         .toggleStyle(.checkbox)
@@ -261,6 +504,33 @@ private struct SessionRow: View {
 
     private func time(_ value: String) -> String {
         String(value.prefix(16)).replacingOccurrences(of: "T", with: " ")
+    }
+}
+
+private struct ThumbnailPreview: View {
+    let path: String
+
+    var body: some View {
+        Group {
+            if let image = NSImage(contentsOf: URL(fileURLWithPath: path)) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "photo")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.black.opacity(0.25))
+            }
+        }
+        .frame(width: 68, height: 48)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(.white.opacity(0.9), lineWidth: 1)
+                .allowsHitTesting(false)
+        )
+        .accessibilityLabel("Media preview")
     }
 }
 
@@ -357,6 +627,9 @@ struct UtilitiesView: View {
     @State private var selectingFolder = false
     @State private var choosingYearRoot = false
     @State private var yearRoot = ""
+    @State private var sheetsRoot = ""
+    @State private var choosingSheetsRoot = false
+    @State private var confirmingSheetSync = false
 
     var body: some View {
         ScrollView {
@@ -376,11 +649,34 @@ struct UtilitiesView: View {
                         HStack { Button("Choose year folder") { choosingYearRoot = true }; Spacer(); Button("Count photos and videos") { Task { await refreshCounts() } }.buttonStyle(.borderedProminent).disabled((yearRoot.isEmpty && app.configuration == nil) || app.isWorking) }
                     }
                 }
-                Card { Label("Google Sheets synchronization and archiving remain available through the Python services. They can be added here with the same bridge pattern when their workflow is finalized.", systemImage: "info.circle").font(.subheadline).foregroundStyle(.secondary) }
+                Card {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Label("Google Sheets sync", systemImage: "tablecells.badge.ellipsis").font(.headline)
+                        Text(sheetsRoot.isEmpty ? (app.configuration?.eventRoot ?? "Choose an event root to sync.") : sheetsRoot)
+                            .lineLimit(1).foregroundStyle(.secondary)
+                        Text("Syncs every event metadata file in this folder to the configured Google Sheet.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            Button("Choose event root") { choosingSheetsRoot = true }
+                            Spacer()
+                            Button("Sync all events") { confirmingSheetSync = true }
+                                .buttonStyle(.borderedProminent)
+                                .disabled((sheetsRoot.isEmpty && app.configuration == nil) || app.isWorking)
+                        }
+                    }
+                }
+                Card { Label("Event archiving remains available through the Python services and can be added to this workspace next.", systemImage: "info.circle").font(.subheadline).foregroundStyle(.secondary) }
             }.padding(28).frame(maxWidth: 1050, alignment: .leading)
         }
         .fileImporter(isPresented: $selectingFolder, allowedContentTypes: [.folder]) { if case .success(let url) = $0 { eventFolder = url.path } }
         .fileImporter(isPresented: $choosingYearRoot, allowedContentTypes: [.folder]) { if case .success(let url) = $0 { yearRoot = url.path } }
+        .fileImporter(isPresented: $choosingSheetsRoot, allowedContentTypes: [.folder]) { if case .success(let url) = $0 { sheetsRoot = url.path } }
+        .alert("Sync all events to Google Sheets?", isPresented: $confirmingSheetSync) {
+            Button("Cancel", role: .cancel) {}
+            Button("Sync") { Task { await syncGoogleSheets() } }
+        } message: {
+            Text("This will update the configured Google Sheet with metadata from every event in the selected folder.")
+        }
     }
 
     private func createJPGs(_ regenerate: Bool) async {
@@ -393,6 +689,13 @@ struct UtilitiesView: View {
         let root = yearRoot.isEmpty ? app.configuration?.eventRoot ?? "" : yearRoot
         if let result = await app.updateMediaCounts(root: root) {
             app.notice = "Checked \(result.found) events: \(result.updated) metadata file(s) updated."
+        }
+    }
+
+    private func syncGoogleSheets() async {
+        let root = sheetsRoot.isEmpty ? app.configuration?.eventRoot ?? "" : sheetsRoot
+        if let result = await app.syncGoogleSheets(root: root) {
+            app.notice = "Google Sheets: \(result.synced) synced, \(result.partial) partial, \(result.failed) failed."
         }
     }
 }
