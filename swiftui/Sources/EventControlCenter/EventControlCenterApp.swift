@@ -176,6 +176,30 @@ final class AppState: ObservableObject {
         return result
     }
 
+    func archiveCandidates(sourceRoot: String, archiveRoot: String) async -> [ArchiveCandidate]? {
+        struct Payload: Codable { let sourceRoot: String; let archiveRoot: String }
+        var result: ArchiveCandidatesResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request(
+                "archive_candidates",
+                payload: Payload(sourceRoot: sourceRoot, archiveRoot: archiveRoot)
+            )
+        }
+        return result?.candidates
+    }
+
+    func archiveEvents(sourceRoot: String, archiveRoot: String, eventFolders: [String]) async -> ArchiveRunResult? {
+        struct Payload: Codable { let sourceRoot: String; let archiveRoot: String; let eventFolders: [String] }
+        var result: ArchiveRunResult?
+        await perform(showSuccess: false) {
+            result = try await self.request(
+                "archive_events",
+                payload: Payload(sourceRoot: sourceRoot, archiveRoot: archiveRoot, eventFolders: eventFolders)
+            )
+        }
+        return result
+    }
+
     private func request<Payload: Encodable, Result: Decodable>(
         _ command: String,
         payload: Payload

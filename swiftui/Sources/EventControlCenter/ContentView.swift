@@ -94,6 +94,9 @@ struct ImportView: View {
     @State private var importProgress: ImportStreamEvent?
     @State private var importStartedAt: Date?
     @State private var pendingSourceCleanup: ImportOutcome?
+    @State private var isCleaningUpSource = false
+    @State private var cardSafetyMessage: String?
+    @State private var cardIsSafeToRemove = false
     @State private var choosingSource = false
     @State private var replaceExisting = false
 
@@ -121,12 +124,24 @@ struct ImportView: View {
             .frame(maxWidth: 1120, alignment: .leading)
         }
         .fileImporter(isPresented: $choosingSource, allowedContentTypes: [.folder]) { result in
-            if case .success(let url) = result { sourcePath = url.path; scan = nil }
+            if case .success(let url) = result {
+                sourcePath = url.path
+                scan = nil
+                clearCardSafetyStatus()
+            }
         }
-        .onChange(of: app.configuration?.defaultSchoolYear) { _, year in
-            if schoolYear.isEmpty { schoolYear = year ?? "" }
+        .onChange(of: app.configuration?.defaultSchoolYear) { _, _ in
+            applyDefaultSchoolYear()
         }
-        .task { await monitorRemovableMedia() }
+        .task {
+            applyDefaultSchoolYear()
+            await monitorRemovableMedia()
+        }
+        .onChange(of: sourcePath) { _, path in
+            if !path.isEmpty && !isCleaningUpSource {
+                clearCardSafetyStatus()
+            }
+        }
         .alert(
             "Delete verified imported media and eject the card?",
             isPresented: Binding(
@@ -161,9 +176,26 @@ struct ImportView: View {
                 }
                 TextField("School year", text: $schoolYear).textFieldStyle(.roundedBorder)
                 TagEditor(tags: $keywords)
-                TextEditor(text: $description).font(.body).frame(height: 84).scrollContentBackground(.hidden)
-                    .padding(8).background(.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 10))
-                    .overlay(alignment: .topLeading) { if description.isEmpty { Text("Description").foregroundStyle(.tertiary).padding(14).allowsHitTesting(false) } }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Description")
+                        .font(.subheadline.weight(.medium))
+                    TextEditor(text: $description)
+                        .font(.body)
+                        .frame(height: 84)
+                        .scrollContentBackground(.hidden)
+                        .padding(8)
+                        .background(.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(alignment: .topLeading) {
+                            if description.isEmpty {
+                                Text("Add an optional description")
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.horizontal, 13)
+                                    .padding(.vertical, 14)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                        .accessibilityLabel("Description")
+                }
                 Divider()
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 135), spacing: 8)], spacing: 8) {
                     ForEach(Array(gradeGroups.enumerated()), id: \.offset) { _, group in
@@ -216,6 +248,7 @@ struct ImportView: View {
                         guard !path.isEmpty else { return }
                         sourcePath = path
                         scan = nil
+                        clearCardSafetyStatus()
                     }
                 }
                 HStack {
@@ -227,7 +260,22 @@ struct ImportView: View {
                     Stepper("Session gap: \(sessionGap) minutes", value: $sessionGap, in: 1...120).frame(maxWidth: 260)
                     Spacer()
                     Button { Task { await scanMedia() } } label: { Label("Scan media", systemImage: "viewfinder") }
-                        .buttonStyle(.bordered).disabled(sourcePath.isEmpty || app.isWorking || isScanning)
+                        .buttonStyle(.bordered).disabled(sourcePath.isEmpty || app.isWorking || isScanning || isCleaningUpSource)
+                }
+                if isCleaningUpSource {
+                    CardSafetyPanel(
+                        title: "Cleaning up card — do not pull it",
+                        message: "Deleting verified files and asking macOS to eject the card…",
+                        isSafe: false,
+                        isWorking: true
+                    )
+                } else if let cardSafetyMessage {
+                    CardSafetyPanel(
+                        title: cardIsSafeToRemove ? "Safe to pull card" : "Card is not safe to pull",
+                        message: cardSafetyMessage,
+                        isSafe: cardIsSafeToRemove,
+                        isWorking: false
+                    )
                 }
             }
         }
@@ -280,6 +328,15 @@ struct ImportView: View {
         }
     }
 
+    private func applyDefaultSchoolYear() {
+        guard schoolYear.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let defaultYear = app.configuration?.defaultSchoolYear.trimmingCharacters(in: .whitespacesAndNewlines),
+              !defaultYear.isEmpty else {
+            return
+        }
+        schoolYear = defaultYear
+    }
+
     private func monitorRemovableMedia() async {
         while !Task.isCancelled {
             let sources = await app.availableSources()
@@ -294,6 +351,7 @@ struct ImportView: View {
                 sourcePath = firstSource.path
                 selectedDetectedSourcePath = firstSource.path
                 scan = nil
+                clearCardSafetyStatus()
                 if !previousPaths.contains(firstSource.path) {
                     app.notice = "Detected \(firstSource.name). Ready to scan media."
                     if !isImporting && !isScanning {
@@ -340,20 +398,71 @@ struct ImportView: View {
     private func cleanUpImportedMedia() async {
         guard let outcome = pendingSourceCleanup else { return }
         pendingSourceCleanup = nil
+        isCleaningUpSource = true
+        cardSafetyMessage = nil
+        cardIsSafeToRemove = false
+        defer { isCleaningUpSource = false }
         let cleanup = SourceCleanupPayload(source: sourcePath, files: outcome.importedSources)
         if let result = await app.cleanupImportedMedia(cleanup) {
             if result.ejected {
+                let failures = result.deleteFailures.count
+                cardIsSafeToRemove = true
+                cardSafetyMessage = failures == 0
+                    ? "The card was ejected. It is safe to pull."
+                    : "The card was ejected and is safe to pull. \(failures) file(s) could not be deleted."
                 app.notice = "Deleted \(result.deleted) verified file(s) and ejected the card."
                 sourcePath = ""
                 selectedDetectedSourcePath = ""
                 scan = nil
             } else {
                 let message = result.ejectMessage.isEmpty ? "The source was not ejected." : result.ejectMessage
+                cardIsSafeToRemove = false
+                cardSafetyMessage = "macOS did not eject the card. Do not pull it yet. \(message)"
                 app.notice = "Deleted \(result.deleted) verified file(s). \(message)"
             }
+        } else {
+            cardIsSafeToRemove = false
+            cardSafetyMessage = "Cleanup did not finish. Do not pull the card; check the error message and try again."
         }
     }
 
+    private func clearCardSafetyStatus() {
+        guard !isCleaningUpSource else { return }
+        cardSafetyMessage = nil
+        cardIsSafeToRemove = false
+    }
+}
+
+private struct CardSafetyPanel: View {
+    let title: String
+    let message: String
+    let isSafe: Bool
+    let isWorking: Bool
+
+    private var tint: Color { isWorking ? .orange : (isSafe ? .green : .red) }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            if isWorking {
+                ProgressView().controlSize(.small).tint(tint)
+            } else {
+                Image(systemName: isSafe ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(tint)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).fontWeight(.semibold)
+                Text(message).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(tint.opacity(0.45))
+                .allowsHitTesting(false)
+        )
+    }
 }
 
 private struct MediaScanProgressPanel: View {
@@ -630,6 +739,15 @@ struct UtilitiesView: View {
     @State private var sheetsRoot = ""
     @State private var choosingSheetsRoot = false
     @State private var confirmingSheetSync = false
+    @State private var archiveSourceRoot = ""
+    @State private var archiveDriveRoot = ""
+    @State private var choosingArchiveSource = false
+    @State private var choosingArchiveDrive = false
+    @State private var archiveCandidates: [ArchiveCandidate] = []
+    @State private var selectedArchiveCandidates: Set<String> = []
+    @State private var confirmingArchive = false
+    @State private var archiveSummary: ArchiveRunResult?
+    @State private var archiveStatus = "Choose the local and shared-drive event folders."
 
     var body: some View {
         ScrollView {
@@ -665,18 +783,134 @@ struct UtilitiesView: View {
                         }
                     }
                 }
-                Card { Label("Event archiving remains available through the Python services and can be added to this workspace next.", systemImage: "info.circle").font(.subheadline).foregroundStyle(.secondary) }
+                archiveCard
             }.padding(28).frame(maxWidth: 1050, alignment: .leading)
         }
         .fileImporter(isPresented: $selectingFolder, allowedContentTypes: [.folder]) { if case .success(let url) = $0 { eventFolder = url.path } }
         .fileImporter(isPresented: $choosingYearRoot, allowedContentTypes: [.folder]) { if case .success(let url) = $0 { yearRoot = url.path } }
         .fileImporter(isPresented: $choosingSheetsRoot, allowedContentTypes: [.folder]) { if case .success(let url) = $0 { sheetsRoot = url.path } }
+        .fileImporter(isPresented: $choosingArchiveSource, allowedContentTypes: [.folder]) {
+            if case .success(let url) = $0 { archiveSourceRoot = url.path; Task { await loadArchiveCandidates() } }
+        }
+        .fileImporter(isPresented: $choosingArchiveDrive, allowedContentTypes: [.folder]) {
+            if case .success(let url) = $0 { archiveDriveRoot = url.path; Task { await loadArchiveCandidates() } }
+        }
         .alert("Sync all events to Google Sheets?", isPresented: $confirmingSheetSync) {
             Button("Cancel", role: .cancel) {}
             Button("Sync") { Task { await syncGoogleSheets() } }
         } message: {
             Text("This will update the configured Google Sheet with metadata from every event in the selected folder.")
         }
+        .alert("Archive selected events?", isPresented: $confirmingArchive) {
+            Button("Cancel", role: .cancel) {}
+            Button("Archive", role: .destructive) { Task { await archiveSelectedEvents() } }
+        } message: {
+            Text("This moves \(selectedArchiveCandidates.count) selected local event folder(s) to the shared drive and leaves shortcuts in their original locations.")
+        }
+        .task { setArchiveDefaults() }
+        .onChange(of: app.configuration?.localEventsRoot) { _, _ in setArchiveDefaults() }
+    }
+
+    private var archiveCard: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Archive local events", systemImage: "archivebox").font(.headline)
+                Text("Move completed local events to the shared drive and leave a shortcut in place. Existing shared-drive folders are excluded.")
+                    .font(.caption).foregroundStyle(.secondary)
+                archiveLocationRow("Local Events", path: archiveSourceRoot, action: { choosingArchiveSource = true })
+                archiveLocationRow("Shared drive Events", path: archiveDriveRoot, action: { choosingArchiveDrive = true })
+                HStack {
+                    Text("Available events").font(.subheadline.weight(.medium))
+                    Spacer()
+                    Button("Refresh") { Task { await loadArchiveCandidates() } }
+                        .disabled(archiveSourceRoot.isEmpty || archiveDriveRoot.isEmpty || app.isWorking)
+                }
+                if archiveCandidates.isEmpty {
+                    ContentUnavailableView(
+                        "No dated event folders found",
+                        systemImage: "archivebox",
+                        description: Text(archiveStatus)
+                    )
+                        .frame(maxWidth: .infinity).padding(.vertical, 10)
+                } else {
+                    List(archiveCandidates, selection: $selectedArchiveCandidates) { candidate in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(candidate.name).fontWeight(.medium)
+                            Text("\(candidate.year) → \(candidate.destination)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Label(
+                                candidate.availabilityLabel,
+                                systemImage: candidate.isReadyToArchive ? "checkmark.circle" : "info.circle"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(candidate.isReadyToArchive ? .green : .secondary)
+                        }
+                        .padding(.vertical, 3)
+                        .opacity(candidate.isReadyToArchive ? 1 : 0.65)
+                        .tag(candidate.id)
+                        .disabled(!candidate.isReadyToArchive)
+                    }
+                    .frame(height: 190)
+                }
+                Text(archiveStatus).font(.caption).foregroundStyle(.secondary)
+                if let archiveSummary {
+                    Text("Last archive: \(archiveSummary.moved) moved · \(archiveSummary.skipped) skipped · \(archiveSummary.failed) failed")
+                        .font(.caption).foregroundStyle(archiveSummary.failed == 0 ? Color.secondary : Color.orange)
+                }
+                HStack {
+                    Button("Select all") { selectedArchiveCandidates = Set(archiveCandidates.filter(\.isReadyToArchive).map(\.id)) }.buttonStyle(.link)
+                    Button("Select none") { selectedArchiveCandidates = [] }.buttonStyle(.link)
+                    Spacer()
+                    Button("Archive selected", systemImage: "archivebox.fill") { confirmingArchive = true }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(selectedArchiveCandidates.isEmpty || app.isWorking)
+                }
+            }
+        }
+    }
+
+    private func archiveLocationRow(_ label: String, path: String, action: @escaping () -> Void) -> some View {
+        HStack {
+            Text(label).foregroundStyle(.secondary).frame(width: 130, alignment: .leading)
+            Text(path.isEmpty ? "Choose a folder" : path).lineLimit(1).foregroundStyle(path.isEmpty ? .secondary : .primary)
+            Spacer()
+            Button("Choose…", action: action)
+        }
+    }
+
+    private func setArchiveDefaults() {
+        guard let configuration = app.configuration else { return }
+        if archiveSourceRoot.isEmpty { archiveSourceRoot = configuration.localEventsRoot }
+        if archiveDriveRoot.isEmpty { archiveDriveRoot = configuration.multimediaEventsRoot }
+        if archiveCandidates.isEmpty { Task { await loadArchiveCandidates() } }
+    }
+
+    private func loadArchiveCandidates() async {
+        guard !archiveSourceRoot.isEmpty, !archiveDriveRoot.isEmpty else {
+            archiveStatus = "Choose both event folders, then refresh."
+            return
+        }
+        if let candidates = await app.archiveCandidates(sourceRoot: archiveSourceRoot, archiveRoot: archiveDriveRoot) {
+            archiveCandidates = candidates
+            selectedArchiveCandidates = Set(candidates.filter(\.isReadyToArchive).map(\.id))
+            let ready = candidates.filter(\.isReadyToArchive).count
+            let archived = candidates.filter(\.alreadyArchived).count
+            let existing = candidates.filter { $0.destinationExists && !$0.alreadyArchived }.count
+            archiveStatus = candidates.isEmpty
+                ? "No folders beginning with a date (YYYY.MM.DD) were found in the selected Local Events folder."
+                : "Found \(candidates.count) event folder(s): \(ready) ready, \(archived) already archived, \(existing) already on the shared drive."
+        } else {
+            archiveStatus = "Could not read the selected Local Events folder. Check the error message, then try Refresh again."
+        }
+    }
+
+    private func archiveSelectedEvents() async {
+        let folders = archiveCandidates
+            .filter { $0.isReadyToArchive && selectedArchiveCandidates.contains($0.id) }
+            .map(\.source)
+        guard let result = await app.archiveEvents(sourceRoot: archiveSourceRoot, archiveRoot: archiveDriveRoot, eventFolders: folders) else { return }
+        archiveSummary = result
+        app.notice = "Archive complete: \(result.moved) moved, \(result.skipped) skipped, \(result.failed) failed."
+        await loadArchiveCandidates()
     }
 
     private func createJPGs(_ regenerate: Bool) async {
@@ -696,6 +930,13 @@ struct UtilitiesView: View {
         let root = sheetsRoot.isEmpty ? app.configuration?.eventRoot ?? "" : sheetsRoot
         if let result = await app.syncGoogleSheets(root: root) {
             app.notice = "Google Sheets: \(result.synced) synced, \(result.partial) partial, \(result.failed) failed."
+            if !result.failures.isEmpty {
+                let details = result.failures.prefix(5).joined(separator: "\n")
+                let remainder = result.failures.count > 5
+                    ? "\n…and \(result.failures.count - 5) more failure(s)."
+                    : ""
+                app.errorMessage = "Google Sheets sync could not complete:\n\n\(details)\(remainder)"
+            }
         }
     }
 }
@@ -713,6 +954,10 @@ struct SettingsView: View {
     @State private var eventYear = ""
     @State private var sharedRoot = ""
     @State private var localRoot = ""
+    @State private var sheetsCredentialsFile = ""
+    @State private var sheetsSpreadsheetID = ""
+    @State private var sheetsWorksheetName = "Events"
+    @State private var choosingSheetsCredentials = false
 
     var body: some View {
         ScrollView {
@@ -730,6 +975,25 @@ struct SettingsView: View {
                         HStack { Spacer(); Button("Save settings") { Task { await save() } }.buttonStyle(.borderedProminent).disabled(eventYear.isEmpty || sharedRoot.isEmpty || localRoot.isEmpty || app.isWorking) }
                     }
                 }
+                Card {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Label("Google Sheets", systemImage: "tablecells").font(.headline)
+                        Grid(alignment: .leading, verticalSpacing: 14) {
+                            GridRow {
+                                Text("Service account").foregroundStyle(.secondary)
+                                HStack {
+                                    TextField("Service-account JSON file", text: $sheetsCredentialsFile)
+                                        .textFieldStyle(.roundedBorder)
+                                    Button("Choose file") { choosingSheetsCredentials = true }
+                                }
+                            }
+                            GridRow { Text("Spreadsheet ID").foregroundStyle(.secondary); TextField("Google Sheet ID", text: $sheetsSpreadsheetID).textFieldStyle(.roundedBorder) }
+                            GridRow { Text("Worksheet").foregroundStyle(.secondary); TextField("Events", text: $sheetsWorksheetName).textFieldStyle(.roundedBorder) }
+                        }
+                        Text("Share the spreadsheet with the service-account email. These settings stay on this Mac and the JSON file is never copied into the project.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 if let config = app.configuration {
                     Card { VStack(alignment: .leading, spacing: 8) { Text("Active destinations").font(.headline); LabeledContent("Shared drive", value: config.eventRoot); LabeledContent("Local", value: config.localEventRoot) } }
                 }
@@ -737,6 +1001,9 @@ struct SettingsView: View {
         }
         .onChange(of: app.configuration?.defaultEventYear) { _, _ in fillFromConfig() }
         .onAppear { fillFromConfig() }
+        .fileImporter(isPresented: $choosingSheetsCredentials, allowedContentTypes: [.json]) { result in
+            if case .success(let url) = result { sheetsCredentialsFile = url.path }
+        }
     }
 
     private func fillFromConfig() {
@@ -744,10 +1011,22 @@ struct SettingsView: View {
         if eventYear.isEmpty { eventYear = config.defaultEventYear }
         if sharedRoot.isEmpty { sharedRoot = config.multimediaEventsRoot }
         if localRoot.isEmpty { localRoot = config.localEventsRoot }
+        if sheetsCredentialsFile.isEmpty { sheetsCredentialsFile = config.googleSheetsCredentialsFile }
+        if sheetsSpreadsheetID.isEmpty { sheetsSpreadsheetID = config.googleSheetsSpreadsheetId }
+        if sheetsWorksheetName == "Events" { sheetsWorksheetName = config.googleSheetsWorksheetName }
     }
 
     private func save() async {
-        await app.saveSettings(SettingsPayload(multimediaEventsRoot: sharedRoot, localEventsRoot: localRoot, defaultEventYear: eventYear))
+        await app.saveSettings(
+            SettingsPayload(
+                multimediaEventsRoot: sharedRoot,
+                localEventsRoot: localRoot,
+                defaultEventYear: eventYear,
+                googleSheetsCredentialsFile: sheetsCredentialsFile,
+                googleSheetsSpreadsheetId: sheetsSpreadsheetID,
+                googleSheetsWorksheetName: sheetsWorksheetName
+            )
+        )
     }
 }
 

@@ -35,8 +35,11 @@ struct BackendClient {
         }
 
         rootURL = root
-        let configuredPython = environment["ECC_PYTHON"] ?? "/usr/bin/python3"
-        pythonURL = URL(fileURLWithPath: configuredPython)
+        pythonURL = try Self.findCompatiblePython(
+            rootURL: rootURL,
+            configuredPython: environment["ECC_PYTHON"],
+            fileManager: fileManager
+        )
     }
 
     func request<Payload: Encodable, Result: Decodable>(
@@ -141,6 +144,59 @@ struct BackendClient {
     private struct Request<Payload: Encodable>: Encodable {
         let command: String
         let payload: Payload
+    }
+
+    private static func findCompatiblePython(
+        rootURL: URL,
+        configuredPython: String?,
+        fileManager: FileManager
+    ) throws -> URL {
+        let candidates = [
+            configuredPython,
+            rootURL.appendingPathComponent(".venv/bin/python").path,
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3",
+            "/usr/bin/python3",
+        ].compactMap { $0 }
+
+        var checked: Set<String> = []
+        for path in candidates where checked.insert(path).inserted {
+            guard fileManager.isExecutableFile(atPath: path) else { continue }
+            if isPython310OrNewer(at: URL(fileURLWithPath: path)) {
+                return URL(fileURLWithPath: path)
+            }
+        }
+
+        throw BackendError.unavailable(
+            "A compatible Python 3.10 or newer installation was not found. " +
+            "Install the project requirements in .venv, or set ECC_PYTHON to that interpreter."
+        )
+    }
+
+    private static func isPython310OrNewer(at pythonURL: URL) -> Bool {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = pythonURL
+        process.arguments = ["-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"]
+        process.standardOutput = output
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0,
+                  let version = String(
+                    data: output.fileHandleForReading.readDataToEndOfFile(),
+                    encoding: .utf8
+                  )?.trimmingCharacters(in: .whitespacesAndNewlines)
+            else { return false }
+
+            let components = version.split(separator: ".").compactMap { Int($0) }
+            guard components.count == 2 else { return false }
+            return components[0] > 3 || (components[0] == 3 && components[1] >= 10)
+        } catch {
+            return false
+        }
     }
 }
 

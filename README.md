@@ -11,11 +11,18 @@ Python services through `backend_bridge.py`; it does not duplicate the media,
 metadata, or folder logic in Swift.
 
 ```bash
-ECC_BACKEND_ROOT="$PWD" ECC_PYTHON="$PWD/.venv/bin/python" swift run --package-path swiftui
+ECC_BACKEND_ROOT="$PWD" swift run --package-path swiftui
 ```
 
-`ECC_PYTHON` must point to the Python environment that has the project's
-requirements installed. The Swift package targets macOS 14 or later.
+The app automatically chooses a Python 3.10+ interpreter, preferring the
+project's `.venv`. To use another interpreter, set `ECC_PYTHON` explicitly.
+Install the project requirements before launching:
+
+```bash
+.venv/bin/python -m pip install --upgrade -r requirements.txt
+```
+
+The Swift package targets macOS 14 or later.
 
 To build the native executable without launching it:
 
@@ -37,7 +44,9 @@ and replace the example paths, or set the shared-drive and local event folders
 in the Settings tab. The app saves those locations locally.
 
 Keep the Google service-account JSON file outside this repository and set its
-path with `GOOGLE_SHEETS_CREDENTIALS_FILE` in `local_settings.conf`.
+path with `GOOGLE_SHEETS_CREDENTIALS_FILE` in `local_settings.conf`. Also set
+`GOOGLE_SHEETS_SPREADSHEET_ID` and, if needed, `GOOGLE_SHEETS_WORKSHEET_NAME`.
+Share the target spreadsheet with the service-account email from that JSON file.
 
 The staff-drive helper has no built-in paths; provide both folders when running
 it:

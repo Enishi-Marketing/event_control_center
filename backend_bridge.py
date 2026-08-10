@@ -16,6 +16,7 @@ from threading import Event
 from typing import Any, Callable
 
 from config.config import AppConfig
+from services.archive_service import ArchiveService
 from services.drive_detector import DriveDetector
 from services.folder_service import FolderService
 from services.importer import ImportProgress, ImportService, MediaScanResult
@@ -36,6 +37,9 @@ def _config() -> dict[str, str]:
         "local_event_root": str(AppConfig.LOCAL_EVENT_ROOT),
         "multimedia_events_root": str(AppConfig.MULTIMEDIA_EVENTS_ROOT),
         "local_events_root": str(AppConfig.LOCAL_EVENTS_ROOT),
+        "google_sheets_credentials_file": AppConfig.GOOGLE_SHEETS_CREDENTIALS_FILE,
+        "google_sheets_spreadsheet_id": AppConfig.GOOGLE_SHEETS_SPREADSHEET_ID,
+        "google_sheets_worksheet_name": AppConfig.GOOGLE_SHEETS_WORKSHEET_NAME,
     }
 
 
@@ -377,6 +381,54 @@ def _sync_google_sheets(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _archive_candidates(payload: dict[str, Any]) -> dict[str, Any]:
+    source_root = Path(str(payload["source_root"])).expanduser()
+    archive_root = Path(str(payload["archive_root"])).expanduser()
+    candidates = ArchiveService().discover_candidates(source_root, archive_root)
+    return {
+        "candidates": [
+            {
+                "source": str(candidate.source),
+                "year": candidate.year,
+                "name": candidate.name,
+                "destination": str(candidate.destination),
+                "already_archived": candidate.already_archived,
+                "destination_exists": candidate.destination_exists,
+            }
+            for candidate in candidates
+        ]
+    }
+
+
+def _archive_events(payload: dict[str, Any]) -> dict[str, Any]:
+    source_root = Path(str(payload["source_root"])).expanduser()
+    archive_root = Path(str(payload["archive_root"])).expanduser()
+    event_folders = [
+        Path(str(path)).expanduser() for path in payload.get("event_folders", [])
+    ]
+    if not event_folders:
+        raise ValueError("Select at least one event to archive.")
+
+    result = ArchiveService().archive_events(source_root, archive_root, event_folders)
+    return {
+        "source_root": str(result.source_root),
+        "archive_root": str(result.archive_root),
+        "selected": result.selected,
+        "moved": result.moved,
+        "skipped": result.skipped,
+        "failed": result.failed,
+        "results": [
+            {
+                "source": str(item.source),
+                "destination": str(item.destination),
+                "status": item.status,
+                "message": item.message,
+            }
+            for item in result.results
+        ],
+    }
+
+
 def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
     commands: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
         "config": lambda _payload: _config(),
@@ -393,6 +445,8 @@ def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         "cleanup_imported_media": _cleanup_imported_media,
         "update_media_counts": _update_media_counts,
         "sync_google_sheets": _sync_google_sheets,
+        "archive_candidates": _archive_candidates,
+        "archive_events": _archive_events,
         "save_settings": _save_settings,
         "search_events": _search_events,
     }
@@ -408,6 +462,11 @@ def _save_settings(payload: dict[str, Any]) -> dict[str, Any]:
         str(payload.get("local_events_root", "")),
     )
     AppConfig.set_default_event_year(str(payload.get("default_event_year", "")))
+    AppConfig.set_google_sheets(
+        str(payload.get("google_sheets_credentials_file", "")),
+        str(payload.get("google_sheets_spreadsheet_id", "")),
+        str(payload.get("google_sheets_worksheet_name", "Events")),
+    )
     return _config()
 
 

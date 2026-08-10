@@ -40,6 +40,9 @@ struct ConfigSnapshot: Codable {
     let localEventRoot: String
     let multimediaEventsRoot: String
     let localEventsRoot: String
+    let googleSheetsCredentialsFile: String
+    let googleSheetsSpreadsheetId: String
+    let googleSheetsWorksheetName: String
 }
 
 struct CreateEventPayload: Codable {
@@ -169,6 +172,9 @@ struct SettingsPayload: Codable {
     let multimediaEventsRoot: String
     let localEventsRoot: String
     let defaultEventYear: String
+    let googleSheetsCredentialsFile: String
+    let googleSheetsSpreadsheetId: String
+    let googleSheetsWorksheetName: String
 }
 
 struct JPGResult: Codable {
@@ -193,4 +199,44 @@ struct GoogleSheetsSyncResult: Codable {
     let partial: Int
     let failed: Int
     let failures: [String]
+}
+
+struct ArchiveCandidate: Codable, Identifiable, Hashable {
+    let source: String
+    let year: String
+    let name: String
+    let destination: String
+    let alreadyArchived: Bool
+    let destinationExists: Bool
+
+    var id: String { source }
+    var isReadyToArchive: Bool { !alreadyArchived && !destinationExists }
+    var availabilityLabel: String {
+        if alreadyArchived { return "Already archived" }
+        if destinationExists { return "Already on shared drive" }
+        return "Ready to archive"
+    }
+}
+
+struct ArchiveCandidatesResponse: Codable {
+    let candidates: [ArchiveCandidate]
+}
+
+struct ArchiveResultItem: Codable, Identifiable {
+    let source: String
+    let destination: String
+    let status: String
+    let message: String
+
+    var id: String { source }
+}
+
+struct ArchiveRunResult: Codable {
+    let sourceRoot: String
+    let archiveRoot: String
+    let selected: Int
+    let moved: Int
+    let skipped: Int
+    let failed: Int
+    let results: [ArchiveResultItem]
 }

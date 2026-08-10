@@ -85,13 +85,16 @@ class AppConfig:
     PROJECT_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
     LOCAL_SETTINGS_PATH = _local_settings_path(APP_NAME)
     _load_local_settings(LOCAL_SETTINGS_PATH)
-    # These paths intentionally have no computer- or account-specific defaults.
-    # Configure shared storage in local_settings.conf on each computer.
+    # A saved local_settings.conf or environment variable can override this
+    # shared-drive default on an individual computer.
     LOCAL_EVENTS_ROOT = Path(
         os.environ.get("LOCAL_EVENTS_ROOT", str(Path.home() / "Documents" / "Events"))
     ).expanduser()
     MULTIMEDIA_EVENTS_ROOT = Path(
-        os.environ.get("MULTIMEDIA_EVENTS_ROOT", str(LOCAL_EVENTS_ROOT))
+        os.environ.get(
+            "MULTIMEDIA_EVENTS_ROOT",
+            "/Users/marketing/Library/CloudStorage/GoogleDrive-austin.witt@enishi.ac.jp/Shared drives/Enishi - Multimedia/04_Events",
+        )
     ).expanduser()
     DEFAULT_EVENT_YEAR = os.environ.get(
         "DEFAULT_EVENT_YEAR",
@@ -187,5 +190,33 @@ class AppConfig:
             {
                 "MULTIMEDIA_EVENTS_ROOT": str(cls.MULTIMEDIA_EVENTS_ROOT),
                 "LOCAL_EVENTS_ROOT": str(cls.LOCAL_EVENTS_ROOT),
+            },
+        )
+
+    @classmethod
+    def set_google_sheets(
+        cls,
+        credentials_file: str,
+        spreadsheet_id: str,
+        worksheet_name: str,
+    ) -> None:
+        """Save the local Google Sheets connection settings."""
+        credentials_file = credentials_file.strip()
+        spreadsheet_id = spreadsheet_id.strip()
+        worksheet_name = worksheet_name.strip() or "Events"
+        if bool(credentials_file) != bool(spreadsheet_id):
+            raise ValueError(
+                "Set both the Google service-account JSON file and spreadsheet ID."
+            )
+
+        cls.GOOGLE_SHEETS_CREDENTIALS_FILE = credentials_file
+        cls.GOOGLE_SHEETS_SPREADSHEET_ID = spreadsheet_id
+        cls.GOOGLE_SHEETS_WORKSHEET_NAME = worksheet_name
+        _write_local_settings(
+            cls.LOCAL_SETTINGS_PATH,
+            {
+                "GOOGLE_SHEETS_CREDENTIALS_FILE": credentials_file,
+                "GOOGLE_SHEETS_SPREADSHEET_ID": spreadsheet_id,
+                "GOOGLE_SHEETS_WORKSHEET_NAME": worksheet_name,
             },
         )
