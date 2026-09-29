@@ -5,8 +5,10 @@ cd "$(dirname "$0")/.."
 
 VERSION="$(tr -d '[:space:]' < VERSION)"
 RELEASE_REPOSITORY="${RELEASE_REPOSITORY:-Enishi-Marketing/event_control_center}"
-DMG_NAME="Event Control Center v${VERSION}.dmg"
-DMG_PATH="$PWD/dist/$DMG_NAME"
+SOURCE_DMG_NAME="Event Control Center v${VERSION}.dmg"
+# GitHub normalizes spaces in uploaded asset names; match the final URL in the signed feed.
+RELEASE_DMG_NAME="Event.Control.Center.v${VERSION}.dmg"
+DMG_PATH="$PWD/dist/$SOURCE_DMG_NAME"
 APPCAST_TOOL="$PWD/build/swift/artifacts/sparkle/Sparkle/bin/generate_appcast"
 STAGE_DIR="$PWD/build/github-release"
 APP_PATH="$PWD/dist/Event Control Center.app"
@@ -29,8 +31,8 @@ fi
 
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR"
-cp "$DMG_PATH" "$STAGE_DIR/$DMG_NAME"
-(cd "$STAGE_DIR" && shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256")
+cp "$DMG_PATH" "$STAGE_DIR/$RELEASE_DMG_NAME"
+(cd "$STAGE_DIR" && shasum -a 256 "$RELEASE_DMG_NAME" > "$RELEASE_DMG_NAME.sha256")
 "$APPCAST_TOOL" \
   --account jp.ac.enishi.event-control-center \
   --download-url-prefix "https://github.com/$RELEASE_REPOSITORY/releases/download/v$VERSION/" \
