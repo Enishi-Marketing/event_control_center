@@ -43,6 +43,8 @@ struct ConfigSnapshot: Codable {
     let googleSheetsCredentialsFile: String
     let googleSheetsSpreadsheetId: String
     let googleSheetsWorksheetName: String
+    let lightroomTemplateDir: String
+    let premiereTemplate: String
 }
 
 struct CreateEventPayload: Codable {
@@ -59,6 +61,12 @@ struct CreateEventPayload: Codable {
 struct CreatedEvent: Codable {
     let eventFolder: String
     let alreadyExisted: Bool
+}
+
+struct ExistingEventInfo: Codable {
+    let eventFolder: String
+    let eventName: String
+    let eventDate: String
 }
 
 struct MediaSessionInfo: Codable, Identifiable {
@@ -101,9 +109,11 @@ struct ImportMediaPayload: Codable {
     let sessionGapMinutes: Int
     let sessionIndexes: [Int]
     let eventName: String
+    let brightness: Int
 }
 
 struct ImportOutcome: Codable {
+    let source: String
     let photosImported: Int
     let videosImported: Int
     let skipped: Int
@@ -175,6 +185,8 @@ struct SettingsPayload: Codable {
     let googleSheetsCredentialsFile: String
     let googleSheetsSpreadsheetId: String
     let googleSheetsWorksheetName: String
+    let lightroomTemplateDir: String
+    let premiereTemplate: String
 }
 
 struct JPGResult: Codable {
@@ -183,6 +195,16 @@ struct JPGResult: Codable {
     let failed: Int
     let cancelled: Bool
     let failures: [String]
+}
+
+struct JPGStreamEvent: Codable {
+    let type: String
+    let current: Int?
+    let total: Int?
+    let currentFile: String?
+    let message: String?
+    let result: JPGResult?
+    let error: String?
 }
 
 struct CountResult: Codable {

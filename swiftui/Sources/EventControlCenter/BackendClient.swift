@@ -15,14 +15,22 @@ enum BackendError: LocalizedError {
 
 struct BackendClient {
     private let rootURL: URL
-    private let pythonURL: URL
+    private let executableURL: URL
+    private let arguments: [String]
 
     init() throws {
         let environment = ProcessInfo.processInfo.environment
         let fileManager = FileManager.default
+        if let bundledBackend = Bundle.main.resourceURL?
+            .appendingPathComponent("backend/EventControlBackend"),
+           fileManager.isExecutableFile(atPath: bundledBackend.path) {
+            rootURL = bundledBackend.deletingLastPathComponent()
+            executableURL = bundledBackend
+            arguments = []
+            return
+        }
         let candidateRoots: [String] = [
             environment["ECC_BACKEND_ROOT"],
-            Bundle.main.resourceURL?.path,
             fileManager.currentDirectoryPath,
             URL(fileURLWithPath: fileManager.currentDirectoryPath).deletingLastPathComponent().path,
         ].compactMap { $0 }
@@ -35,11 +43,12 @@ struct BackendClient {
         }
 
         rootURL = root
-        pythonURL = try Self.findCompatiblePython(
+        executableURL = try Self.findCompatiblePython(
             rootURL: rootURL,
             configuredPython: environment["ECC_PYTHON"],
             fileManager: fileManager
         )
+        arguments = [root.appendingPathComponent("backend_bridge.py").path]
     }
 
     func request<Payload: Encodable, Result: Decodable>(
@@ -52,8 +61,8 @@ struct BackendClient {
         let body = try encoder.encode(request)
         return try await Task.detached(priority: .userInitiated) {
             let process = Process()
-            process.executableURL = pythonURL
-            process.arguments = [rootURL.appendingPathComponent("backend_bridge.py").path]
+            process.executableURL = executableURL
+            process.arguments = arguments
             process.currentDirectoryURL = rootURL
 
             let input = Pipe()
@@ -66,7 +75,7 @@ struct BackendClient {
             do {
                 try process.run()
             } catch {
-                throw BackendError.unavailable("Could not start Python at \(pythonURL.path). Set ECC_PYTHON to this app's configured Python interpreter.")
+                throw BackendError.unavailable("Could not start the backend at \(executableURL.path): \(error.localizedDescription)")
             }
             input.fileHandleForWriting.write(body)
             try? input.fileHandleForWriting.close()
@@ -93,7 +102,20 @@ struct BackendClient {
     func importEvents(
         payload: ImportMediaPayload
     ) throws -> AsyncThrowingStream<ImportStreamEvent, Error> {
-        let request = Request(command: "import_media_stream", payload: payload)
+        try streamEvents("import_media_stream", payload: payload)
+    }
+
+    func jpgEvents<Payload: Encodable>(
+        payload: Payload
+    ) throws -> AsyncThrowingStream<JPGStreamEvent, Error> {
+        try streamEvents("generate_jpgs_stream", payload: payload)
+    }
+
+    private func streamEvents<Payload: Encodable, StreamEvent: Decodable>(
+        _ command: String,
+        payload: Payload
+    ) throws -> AsyncThrowingStream<StreamEvent, Error> {
+        let request = Request(command: command, payload: payload)
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
         let body = try encoder.encode(request)
@@ -101,8 +123,8 @@ struct BackendClient {
         return AsyncThrowingStream { continuation in
             Task.detached(priority: .userInitiated) {
                 let process = Process()
-                process.executableURL = pythonURL
-                process.arguments = [rootURL.appendingPathComponent("backend_bridge.py").path]
+                process.executableURL = executableURL
+                process.arguments = arguments
                 process.currentDirectoryURL = rootURL
 
                 let input = Pipe()
@@ -121,7 +143,7 @@ struct BackendClient {
                     decoder.keyDecodingStrategy = .convertFromSnakeCase
                     for try await line in output.fileHandleForReading.bytes.lines {
                         guard let data = line.data(using: .utf8) else { continue }
-                        let event = try decoder.decode(ImportStreamEvent.self, from: data)
+                        let event = try decoder.decode(StreamEvent.self, from: data)
                         continuation.yield(event)
                     }
                     process.waitUntilExit()
@@ -129,7 +151,7 @@ struct BackendClient {
                         let message = String(
                             data: errors.fileHandleForReading.readDataToEndOfFile(),
                             encoding: .utf8
-                        ) ?? "Import process stopped unexpectedly."
+                        ) ?? "Backend process stopped unexpectedly."
                         continuation.finish(throwing: BackendError.failed(message))
                     } else {
                         continuation.finish()

@@ -1,12 +1,17 @@
+import os
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event
 
+from PIL import Image
+
 from services.importer import PHOTO_EXTENSIONS
 from services.metadata_service import MetadataService
+from services.photo_brightness import brighten, extra_brightness_amount
 
 
 JPEG_EXTENSIONS = {".jpg", ".jpeg"}
@@ -36,7 +41,7 @@ class UneditedJpgSummary:
 
 
 class UneditedJpgService:
-    """Creates resized JPEG copies from event RAW photos."""
+    """Creates resized, gently brightened JPEG copies from event photos."""
 
     def __init__(self, metadata_service: MetadataService | None = None) -> None:
         self.metadata_service = metadata_service or MetadataService()
@@ -47,7 +52,9 @@ class UneditedJpgService:
         cancel_event: Event | None = None,
         progress_callback: Callable[[UneditedJpgProgress], None] | None = None,
         regenerate_all: bool = False,
+        brightness: int = 0,
     ) -> UneditedJpgSummary:
+        extra_brightness_amount(brightness)
         summary = UneditedJpgSummary()
         source_folder = event_folder / "Raw" / "Photos"
         destination_folder = event_folder / "Unedited JPGs" / "Photos"
@@ -81,13 +88,16 @@ class UneditedJpgService:
                 continue
 
             try:
-                self._create_or_replace_jpeg(source, destination, regenerate_all)
+                created = self._create_or_replace_jpeg(source, destination, regenerate_all, brightness)
             except Exception as exc:
                 summary.failed += 1
                 summary.failures.append(f"{source}: {exc}")
                 continue
 
-            summary.generated += 1
+            if created:
+                summary.generated += 1
+            else:
+                summary.skipped += 1
 
         self._update_metadata_count(event_folder, destination_folder)
         self._emit_progress(progress_callback, total, total, None, "JPEG generation finished.")
@@ -106,30 +116,43 @@ class UneditedJpgService:
             key=lambda path: path.name.casefold(),
         )
 
-    def _create_jpeg(self, source: Path, destination: Path) -> None:
+    def _create_jpeg(self, source: Path, destination: Path, brightness: int) -> None:
         suffix = source.suffix.casefold()
         dimensions = self._image_dimensions(source)
         long_edge = max(dimensions) if dimensions is not None else None
+        prepared = source
 
-        if suffix in JPEG_EXTENSIONS and long_edge is not None and long_edge <= MAX_LONG_EDGE:
-            shutil.copy2(source, destination)
-            return
+        if suffix not in JPEG_EXTENSIONS or long_edge is None or long_edge > MAX_LONG_EDGE:
+            prepared = destination.with_name("converted.jpg")
+            command = [
+                "sips",
+                "-s",
+                "format",
+                "jpeg",
+                "-s",
+                "formatOptions",
+                JPEG_QUALITY,
+                "--resampleHeightWidthMax",
+                str(MAX_LONG_EDGE),
+                str(source),
+                "--out",
+                str(prepared),
+            ]
+            subprocess.run(command, check=True, capture_output=True, text=True)
 
-        command = [
-            "sips",
-            "-s",
-            "format",
-            "jpeg",
-            "-s",
-            "formatOptions",
-            JPEG_QUALITY,
-            "--resampleHeightWidthMax",
-            str(MAX_LONG_EDGE),
-            str(source),
-            "--out",
-            str(destination),
-        ]
-        subprocess.run(command, check=True, capture_output=True, text=True)
+        with Image.open(prepared) as image:
+            brightened = brighten(image, brightness)
+            if brightened is image:
+                shutil.copy2(prepared, destination)
+            else:
+                exif = image.info.get("exif")
+                icc_profile = image.info.get("icc_profile")
+                options: dict[str, object] = {"quality": int(JPEG_QUALITY)}
+                if exif:
+                    options["exif"] = exif
+                if icc_profile and brightened.mode == image.mode:
+                    options["icc_profile"] = icc_profile
+                brightened.save(destination, format="JPEG", **options)
         shutil.copystat(source, destination, follow_symlinks=True)
 
     def _create_or_replace_jpeg(
@@ -137,19 +160,19 @@ class UneditedJpgService:
         source: Path,
         destination: Path,
         replace_existing: bool,
-    ) -> None:
-        if not destination.exists() or not replace_existing:
-            self._create_jpeg(source, destination)
-            return
-
-        temporary = destination.with_name(f".{destination.stem}.tmp{destination.suffix}")
-        temporary.unlink(missing_ok=True)
-        try:
-            self._create_jpeg(source, temporary)
-            temporary.replace(destination)
-        except Exception:
-            temporary.unlink(missing_ok=True)
-            raise
+        brightness: int,
+    ) -> bool:
+        with tempfile.TemporaryDirectory(prefix=".jpg-", dir=destination.parent) as workdir:
+            staged = Path(workdir) / "output.jpg"
+            self._create_jpeg(source, staged, brightness)
+            if replace_existing:
+                os.replace(staged, destination)
+            else:
+                try:
+                    os.link(staged, destination)
+                except FileExistsError:
+                    return False
+        return True
 
     def _image_dimensions(self, source: Path) -> tuple[int, int] | None:
         command = ["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(source)]

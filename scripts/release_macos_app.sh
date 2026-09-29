@@ -74,7 +74,7 @@ fi
 printf '%s\n' "$new_version" > "$VERSION_FILE"
 
 echo "Version: $current_version -> $new_version"
-if ! scripts/build_macos_app.sh; then
+if ! scripts/package_staff_dmg.sh; then
   printf '%s\n' "$current_version" > "$VERSION_FILE"
   echo "Build failed. Restored version to $current_version."
   exit 1

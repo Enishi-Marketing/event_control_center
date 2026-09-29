@@ -4,6 +4,49 @@ Desktop application for an international school multimedia workflow.
 
 ## Run
 
+### Install on a staff Mac
+
+The staff release is `Event Control Center vX.Y.Z.dmg` for macOS 14 or later.
+Open the disk image, drag **Event Control Center** to **Applications**, then open
+it from Applications. The app icon, Python backend, and dependencies are
+included; staff do not need this repository, Python, Swift, or a terminal.
+
+The no-fee release uses an ad hoc signature. On first launch, macOS may block
+it because it is not notarized. After trying to open it, go to **System
+Settings → Privacy & Security → Open Anyway**, enter the Mac login password,
+and click **Open**. macOS saves that exception for future launches. The disk
+image contains the same instructions in `Install Event Control Center.txt`.
+Future updates may require approval again. See [Apple's first-open instructions](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unidentified-developer-mh40617/mac).
+
+On first launch, Settings opens so each person can choose their shared-drive
+Events folder and local Events folder. The school-year folder is created below
+those roots. Blank Lightroom and Premiere projects are included and used
+automatically; the template fields in Settings are optional overrides. Google
+Sheets requires a service-account JSON file and spreadsheet ID; obtain these
+through the team's approved credential-sharing
+process. No credentials or personal paths are included in the installer.
+
+After scanning an SD card, use **Extra brightness** above the session previews
+to see the lift before importing. New unedited JPG copies use that level; the
+original photos are untouched. The same control is available under Utilities
+for manual JPG generation. Choose **Regenerate all** there to apply a new
+level to JPGs that already exist; a progress bar shows the current image and
+the number completed. New installations start at **Auto + 50**; staff can
+adjust the slider and their choice is saved on that Mac.
+
+To add missing media to an event already on the shared drive, choose **Choose
+existing event folder** on the Import page, then **Choose media folder** for
+the original files. The existing event metadata is kept, and manually chosen
+source folders are never offered for deletion or ejection. Detected writable
+removable cards still offer optional cleanup after import. The app sends a
+macOS notification when an import finishes; macOS may ask for notification
+permission the first time.
+
+This build targets the CPU architecture of the Mac on which it is built. Build
+on Apple Silicon for Apple Silicon staff Macs; an Intel build needs an Intel
+build machine and Python environment. Test the distributed disk image on a
+second Mac before sending it to staff.
+
 ### Native macOS interface (SwiftUI)
 
 The new macOS interface is a native SwiftUI application. It uses the existing
@@ -36,7 +79,7 @@ swift build --package-path swiftui
 python3 main.py
 ```
 
-## Per-computer setup
+## Per-computer setup for source runs
 
 Each computer keeps its own paths and credentials outside Git. Before using the
 app, copy `config/local_settings.example.conf` to `config/local_settings.conf`
@@ -55,6 +98,50 @@ it:
 python3 create_staff_drive_events.py /path/to/events/2025-26 /path/to/archive/2025-2026
 ```
 
+## Build a staff release without Apple membership
+
+From this Mac, install the build dependencies and create the staff disk image:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt -r requirements-build.txt
+scripts/package_staff_dmg.sh
+```
+
+This creates `dist/Event Control Center vX.Y.Z.dmg` and a SHA-256 checksum file.
+Share the DMG with staff through the school's normal file-sharing channel. To
+bump `VERSION` and build in one step, use `scripts/release_macos_app.sh`; it
+accepts `patch`, `minor`, `major`, or `--version X.Y.Z`.
+
+The free release cannot avoid macOS's first-open approval. Do not strip the
+quarantine attribute or turn off Gatekeeper on staff Macs. Apple documents the
+manual approval path above. If school IT manages staff Macs, ask whether its
+device-management policy already supports internal apps.
+
+## Optional notarized release
+
+The release requires an Apple Developer Program **Developer ID Application**
+certificate in the build Mac's keychain and a saved `notarytool` keychain
+profile. Apple checks the signed disk image and staples a notarization ticket
+to it. The release script stops if signing or notarization fails; only the
+`.dmg` reported as ready by that script should be distributed.
+Signing and notarization happen once per release, not every week. Installed
+versions continue to run after the signing certificate expires; a new release
+needs a valid certificate when it is built. See [Apple's Developer ID guidance](https://developer.apple.com/help/account/certificates/create-developer-id-certificates).
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt -r requirements-build.txt
+export CODESIGN_IDENTITY='Developer ID Application: Your Organization (TEAMID)'
+export NOTARYTOOL_PROFILE='your-saved-profile'
+scripts/notarize_staff_app.sh
+```
+
+For a local `.app` build without a DMG, run `scripts/build_staff_app.sh`.
+
+The notarized build signs the PyInstaller backend and SwiftUI executable with
+the same Developer ID identity.
+
 ## Build the legacy Tkinter macOS App
 
 From the project folder, install the app and build dependencies into the virtual
@@ -72,21 +159,6 @@ The build creates:
 - `dist/Event Control Center.app` for double-click launching
 - `dist/Event Control Center vX.Y.Z.zip` for sharing or moving to another Mac
 - `dist/Event Control Center.zip` as the latest unversioned copy
-
-To bump the version and build in one step:
-
-```bash
-scripts/release_macos_app.sh
-```
-
-By default this bumps the patch version, such as `0.1.0` to `0.1.1`.
-You can also choose:
-
-```bash
-scripts/release_macos_app.sh minor
-scripts/release_macos_app.sh major
-scripts/release_macos_app.sh --version 1.2.0
-```
 
 The current app version lives in `VERSION`.
 
@@ -130,7 +202,7 @@ python3 main.py
 - Photo and video folders are created only when that media type is imported
 - Timestamp-preserving copies with duplicate filename protection
 - SHA-256 verification, progress updates, cancellation, metadata count updates, and append-only import logs
-- Automatic Unedited JPG generation for imported photos
+- Automatic Unedited JPG generation with a gentle brightness lift for dark photos
 - Lightroom catalog creation for photo imports
 - Premiere project creation for video imports
 - Event import destination choice: Google Drive or local Events folder

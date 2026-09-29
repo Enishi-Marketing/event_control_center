@@ -3,6 +3,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from services.drive_detector import DriveDetector
+
 
 @dataclass
 class SourceCleanupResult:
@@ -23,6 +25,11 @@ class SourceCleanupService:
         source: Path,
     ) -> SourceCleanupResult:
         result = SourceCleanupResult()
+        mount_path = self.ejectable_mount(source)
+        if mount_path is None:
+            result.eject_message = "Source is not a recognized removable mount; no files were deleted."
+            return result
+
         unique_files = sorted({path for path in files}, key=lambda path: str(path))
 
         for path in unique_files:
@@ -38,30 +45,11 @@ class SourceCleanupService:
             except OSError as exc:
                 result.delete_failures.append(f"{path}: {exc}")
 
-        mount_path = self.ejectable_mount(source)
-        if mount_path is None:
-            result.eject_message = "Source is not a recognized removable mount."
-            return result
-
         result.ejected, result.eject_message = self._eject(mount_path)
         return result
 
     def ejectable_mount(self, source: Path) -> Path | None:
-        source = source.resolve()
-        roots = (Path("/Volumes"), Path("/media"), Path("/mnt"))
-
-        for root in roots:
-            try:
-                relative = source.relative_to(root)
-            except ValueError:
-                continue
-
-            parts = relative.parts
-            if not parts:
-                return None
-            return root / parts[0]
-
-        return None
+        return DriveDetector().removable_mount(source)
 
     def _is_within(self, path: Path, source: Path) -> bool:
         try:

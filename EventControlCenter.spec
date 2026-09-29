@@ -21,7 +21,7 @@ a = Analysis(
     ["main.py"],
     pathex=[],
     binaries=[],
-    datas=[("assets/app_logo.png", "assets")],
+    datas=[("assets/app_logo.png", "assets"), ("assets/templates", "templates")],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

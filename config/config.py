@@ -1,7 +1,16 @@
 from pathlib import Path
+from datetime import date
 import os
 import re
 import sys
+
+
+def _unquote_path(value: str) -> str:
+    """Accept paths pasted with a matching pair of shell-style quotes."""
+    value = value.strip()
+    if len(value) >= 2 and value[0] in {"'", '"'} and value[-1] == value[0]:
+        return value[1:-1]
+    return value
 
 
 def _load_local_settings(settings_path: Path) -> None:
@@ -16,7 +25,7 @@ def _load_local_settings(settings_path: Path) -> None:
 
         key, value = line.split("=", 1)
         key = key.strip()
-        value = value.strip().strip("\"'")
+        value = _unquote_path(value)
         if key and key not in os.environ:
             os.environ[key] = value
 
@@ -76,6 +85,18 @@ def _local_settings_path(app_name: str) -> Path:
     return Path.home() / "Library" / "Application Support" / app_name / "local_settings.conf"
 
 
+def _current_event_year() -> str:
+    today = date.today()
+    start = today.year if today.month >= 8 else today.year - 1
+    return f"{start}-{(start + 1) % 100:02d}"
+
+
+def _template_override(key: str, legacy_default: Path) -> str:
+    """Treat paths auto-saved by older releases as the new bundled default."""
+    value = os.environ.get(key, "").strip()
+    return "" if value and Path(value).expanduser() == legacy_default else value
+
+
 class AppConfig:
     """Central location for application-level paths and defaults."""
 
@@ -83,22 +104,23 @@ class AppConfig:
     MIN_WIDTH = 900
     MIN_HEIGHT = 700
     PROJECT_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+    BUNDLED_TEMPLATE_ROOT = PROJECT_ROOT / ("templates" if getattr(sys, "frozen", False) else "assets/templates")
+    BUNDLED_LIGHTROOM_TEMPLATE_DIR = BUNDLED_TEMPLATE_ROOT / "Blank_Lightroom"
+    BUNDLED_PREMIERE_TEMPLATE = BUNDLED_TEMPLATE_ROOT / "Blank_Premiere_Project.prproj"
     LOCAL_SETTINGS_PATH = _local_settings_path(APP_NAME)
     _load_local_settings(LOCAL_SETTINGS_PATH)
-    # A saved local_settings.conf or environment variable can override this
-    # shared-drive default on an individual computer.
+    # Staff choose a shared-drive folder on first launch; never bake in a
+    # developer's account-specific CloudStorage path.
     LOCAL_EVENTS_ROOT = Path(
         os.environ.get("LOCAL_EVENTS_ROOT", str(Path.home() / "Documents" / "Events"))
     ).expanduser()
+    SHARED_DRIVE_CONFIGURED = bool(os.environ.get("MULTIMEDIA_EVENTS_ROOT", "").strip())
     MULTIMEDIA_EVENTS_ROOT = Path(
-        os.environ.get(
-            "MULTIMEDIA_EVENTS_ROOT",
-            "/Users/marketing/Library/CloudStorage/GoogleDrive-austin.witt@enishi.ac.jp/Shared drives/Enishi - Multimedia/04_Events",
-        )
+        os.environ.get("MULTIMEDIA_EVENTS_ROOT", "")
     ).expanduser()
     DEFAULT_EVENT_YEAR = os.environ.get(
         "DEFAULT_EVENT_YEAR",
-        _school_year_to_event_year(os.environ.get("DEFAULT_SCHOOL_YEAR", "2025-2026")),
+        _school_year_to_event_year(os.environ.get("DEFAULT_SCHOOL_YEAR", _current_event_year())),
     )
     DEFAULT_SCHOOL_YEAR = os.environ.get(
         "DEFAULT_SCHOOL_YEAR",
@@ -113,16 +135,17 @@ class AppConfig:
         os.environ.get("ARCHIVE_DRIVE_ROOT", str(MULTIMEDIA_EVENTS_ROOT))
     )
     DEFAULT_SESSION_GAP_MINUTES = 20
+    LIGHTROOM_TEMPLATE_OVERRIDE = _template_override(
+        "LIGHTROOM_TEMPLATE_DIR", Path.home() / "Documents" / "Blank_Lightroom"
+    )
+    PREMIERE_TEMPLATE_OVERRIDE = _template_override(
+        "PREMIERE_TEMPLATE", Path.home() / "Documents" / "Blank_Premiere" / "Blank_Premiere_Project.prproj"
+    )
     LIGHTROOM_TEMPLATE_DIR = Path(
-        os.environ.get(
-            "LIGHTROOM_TEMPLATE_DIR", str(Path.home() / "Documents" / "Blank_Lightroom")
-        )
+        LIGHTROOM_TEMPLATE_OVERRIDE or str(BUNDLED_LIGHTROOM_TEMPLATE_DIR)
     ).expanduser()
     PREMIERE_TEMPLATE = Path(
-        os.environ.get(
-            "PREMIERE_TEMPLATE",
-            str(Path.home() / "Documents" / "Blank_Premiere" / "Blank_Premiere_Project.prproj"),
-        )
+        PREMIERE_TEMPLATE_OVERRIDE or str(BUNDLED_PREMIERE_TEMPLATE)
     ).expanduser()
     GOOGLE_SHEETS_CREDENTIALS_FILE = os.environ.get(
         "GOOGLE_SHEETS_CREDENTIALS_FILE",
@@ -169,12 +192,13 @@ class AppConfig:
     @classmethod
     def set_event_roots(cls, multimedia_events_root: str, local_events_root: str) -> None:
         """Save the per-computer event locations and refresh derived paths."""
-        multimedia_events_root = multimedia_events_root.strip()
-        local_events_root = local_events_root.strip()
+        multimedia_events_root = _unquote_path(multimedia_events_root)
+        local_events_root = _unquote_path(local_events_root)
         if not multimedia_events_root or not local_events_root:
             raise ValueError("Choose both the shared-drive and local event folders.")
 
         cls.MULTIMEDIA_EVENTS_ROOT = Path(multimedia_events_root).expanduser()
+        cls.SHARED_DRIVE_CONFIGURED = True
         cls.LOCAL_EVENTS_ROOT = Path(local_events_root).expanduser()
         cls.EVENT_ROOT = cls.MULTIMEDIA_EVENTS_ROOT / cls.DEFAULT_EVENT_YEAR
         cls.LOCAL_EVENT_ROOT = cls.LOCAL_EVENTS_ROOT / cls.DEFAULT_EVENT_YEAR
@@ -218,5 +242,23 @@ class AppConfig:
                 "GOOGLE_SHEETS_CREDENTIALS_FILE": credentials_file,
                 "GOOGLE_SHEETS_SPREADSHEET_ID": spreadsheet_id,
                 "GOOGLE_SHEETS_WORKSHEET_NAME": worksheet_name,
+            },
+        )
+
+    @classmethod
+    def set_project_templates(cls, lightroom_dir: str, premiere_file: str) -> None:
+        lightroom_dir = lightroom_dir.strip()
+        premiere_file = premiere_file.strip()
+        os.environ["LIGHTROOM_TEMPLATE_DIR"] = lightroom_dir
+        os.environ["PREMIERE_TEMPLATE"] = premiere_file
+        cls.LIGHTROOM_TEMPLATE_OVERRIDE = lightroom_dir
+        cls.PREMIERE_TEMPLATE_OVERRIDE = premiere_file
+        cls.LIGHTROOM_TEMPLATE_DIR = Path(lightroom_dir).expanduser() if lightroom_dir else cls.BUNDLED_LIGHTROOM_TEMPLATE_DIR
+        cls.PREMIERE_TEMPLATE = Path(premiere_file).expanduser() if premiere_file else cls.BUNDLED_PREMIERE_TEMPLATE
+        _write_local_settings(
+            cls.LOCAL_SETTINGS_PATH,
+            {
+                "LIGHTROOM_TEMPLATE_DIR": lightroom_dir,
+                "PREMIERE_TEMPLATE": premiere_file,
             },
         )

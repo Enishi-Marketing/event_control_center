@@ -10,8 +10,11 @@ from datetime import datetime
 from pathlib import Path
 from threading import Event
 
+from PIL import Image
+
 from services.hash_service import HashService
 from services.metadata_service import MetadataService
+from services.photo_brightness import brighten
 
 
 PHOTO_EXTENSIONS = {
@@ -451,7 +454,15 @@ class ImportService:
                 continue
 
             if completed.returncode == 0 and cache_path.exists():
-                return MediaThumbnail(source=media_file.path, path=cache_path)
+                try:
+                    with Image.open(cache_path) as image:
+                        adjusted = brighten(image)
+                        if adjusted is not image:
+                            adjusted.save(cache_path, format="PNG")
+                    return MediaThumbnail(source=media_file.path, path=cache_path)
+                except Exception as exc:
+                    cache_path.unlink(missing_ok=True)
+                    thumbnail_failures.append(f"Thumbnail {media_file.path}: {exc}")
 
         cache_path.unlink(missing_ok=True)
         thumbnail_failures.append(
@@ -462,7 +473,7 @@ class ImportService:
     def _thumbnail_cache_path(self, source: Path) -> Path:
         try:
             stat = source.stat()
-            fingerprint = f"{source}|{stat.st_mtime_ns}|{stat.st_size}"
+            fingerprint = f"brightness-v1|{source}|{stat.st_mtime_ns}|{stat.st_size}"
         except OSError:
             fingerprint = str(source)
         digest = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()

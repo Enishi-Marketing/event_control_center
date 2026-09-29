@@ -8,6 +8,7 @@ without duplicating media, folder, metadata, or configuration logic in Swift.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import asdict
 from datetime import datetime
@@ -33,30 +34,33 @@ def _config() -> dict[str, str]:
     return {
         "default_event_year": AppConfig.DEFAULT_EVENT_YEAR,
         "default_school_year": AppConfig.DEFAULT_SCHOOL_YEAR,
-        "event_root": str(AppConfig.EVENT_ROOT),
+        "event_root": str(AppConfig.EVENT_ROOT) if AppConfig.SHARED_DRIVE_CONFIGURED else "",
         "local_event_root": str(AppConfig.LOCAL_EVENT_ROOT),
-        "multimedia_events_root": str(AppConfig.MULTIMEDIA_EVENTS_ROOT),
+        "multimedia_events_root": str(AppConfig.MULTIMEDIA_EVENTS_ROOT) if AppConfig.SHARED_DRIVE_CONFIGURED else "",
         "local_events_root": str(AppConfig.LOCAL_EVENTS_ROOT),
         "google_sheets_credentials_file": AppConfig.GOOGLE_SHEETS_CREDENTIALS_FILE,
         "google_sheets_spreadsheet_id": AppConfig.GOOGLE_SHEETS_SPREADSHEET_ID,
         "google_sheets_worksheet_name": AppConfig.GOOGLE_SHEETS_WORKSHEET_NAME,
+        "lightroom_template_dir": AppConfig.LIGHTROOM_TEMPLATE_OVERRIDE,
+        "premiere_template": AppConfig.PREMIERE_TEMPLATE_OVERRIDE,
     }
 
 
 def _search_roots(source: str) -> dict[str, Path]:
+    drive_roots = AppConfig.SHARED_DRIVE_CONFIGURED
     if source == "Current year":
-        return {
-            "Google Drive": AppConfig.EVENT_ROOT,
-            "Local Events": AppConfig.LOCAL_EVENT_ROOT,
-        }
+        roots = {"Local Events": AppConfig.LOCAL_EVENT_ROOT}
+        if drive_roots:
+            roots["Google Drive"] = AppConfig.EVENT_ROOT
+        return roots
     if source == "Google Drive":
-        return {"Google Drive": AppConfig.ARCHIVE_DRIVE_ROOT}
+        return {"Google Drive": AppConfig.ARCHIVE_DRIVE_ROOT} if drive_roots else {}
     if source == "Local Events":
         return {"Local Events": AppConfig.ARCHIVE_SOURCE_ROOT}
-    return {
-        "Google Drive": AppConfig.ARCHIVE_DRIVE_ROOT,
-        "Local Events": AppConfig.ARCHIVE_SOURCE_ROOT,
-    }
+    roots = {"Local Events": AppConfig.ARCHIVE_SOURCE_ROOT}
+    if drive_roots:
+        roots["Google Drive"] = AppConfig.ARCHIVE_DRIVE_ROOT
+    return roots
 
 
 def _record(record: MetadataSearchRecord) -> dict[str, Any]:
@@ -131,6 +135,8 @@ def _create_event(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Use the date format YYYY.MM.DD.") from exc
 
     destination = str(payload.get("destination", "Google Drive"))
+    if destination != "Local Events Folder" and not AppConfig.SHARED_DRIVE_CONFIGURED:
+        raise ValueError("Choose the shared-drive events folder in Settings first.")
     root = AppConfig.LOCAL_EVENT_ROOT if destination == "Local Events Folder" else AppConfig.EVENT_ROOT
     folders = FolderService(root)
     existing = folders.event_exists(event_date, event_name)
@@ -154,12 +160,42 @@ def _create_event(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _inspect_existing_event(payload: dict[str, Any]) -> dict[str, str]:
+    folder = Path(str(payload.get("event_folder", ""))).expanduser()
+    if not folder.is_dir():
+        raise ValueError("Choose an existing event folder.")
+
+    metadata_path = folder / "Data" / "metadata.json"
+    metadata = MetadataService().read_metadata(metadata_path) if metadata_path.exists() else {}
+    folder_match = re.fullmatch(r"(\d{4}\.\d{2}\.\d{2}) - (.+)", folder.name)
+    if not metadata and folder_match is None and not (folder / "Raw").is_dir():
+        raise ValueError("Choose an event folder, not a general media folder.")
+
+    return {
+        "event_folder": str(folder.resolve()),
+        "event_name": str(metadata.get("event_name") or (folder_match.group(2) if folder_match else folder.name)),
+        "event_date": str(metadata.get("date") or (folder_match.group(1) if folder_match else "")),
+    }
+
+
+def _validate_import_paths(source: Path, event_folder: Path) -> None:
+    source = source.resolve()
+    event_folder = event_folder.resolve()
+    if source == event_folder or event_folder.is_relative_to(source):
+        raise ValueError("Choose the folder holding the original media, not the event folder or its parent.")
+    if source.is_relative_to(event_folder):
+        first_part = source.relative_to(event_folder).parts[0]
+        if first_part in {"Raw", "Unedited JPGs", "Finals", "Data"}:
+            raise ValueError("Choose unimported media, not an output folder inside the event.")
+
+
 def _import_media(
     payload: dict[str, Any],
     progress_callback: Callable[[ImportProgress], None] | None = None,
 ) -> dict[str, Any]:
     source = Path(str(payload["source"]))
     event_folder = Path(str(payload["event_folder"]))
+    _validate_import_paths(source, event_folder)
     gap_minutes = max(1, int(payload.get("session_gap_minutes", 20)))
     selected_sessions = {int(value) for value in payload.get("session_indexes", [])}
     scan = ImportService().scan_media(source, gap_minutes)
@@ -191,7 +227,10 @@ def _import_media(
                 phase="Generating previews",
             )
         )
-    jpg_summary = UneditedJpgService().generate_for_event(event_folder)
+    jpg_summary = UneditedJpgService().generate_for_event(
+        event_folder,
+        brightness=int(payload.get("brightness", 0)),
+    )
     return {
         "photos_imported": summary.photos_imported,
         "videos_imported": summary.videos_imported,
@@ -210,6 +249,11 @@ def _emit_stream_event(event_type: str, **values: object) -> None:
 def _stream_import_media(payload: dict[str, Any]) -> None:
     source = Path(str(payload["source"]))
     event_folder = Path(str(payload["event_folder"]))
+    try:
+        _validate_import_paths(source, event_folder)
+    except ValueError as exc:
+        _emit_stream_event("error", error=str(exc))
+        return
     gap_minutes = max(1, int(payload.get("session_gap_minutes", 20)))
     selected_sessions = {int(value) for value in payload.get("session_indexes", [])}
     scan = ImportService().scan_media(source, gap_minutes)
@@ -297,6 +341,7 @@ def _stream_import_media(payload: dict[str, Any]) -> None:
         jpg_summary = jpg_service.generate_for_event(
             event_folder,
             progress_callback=jpg_progress_callback,
+            brightness=int(payload.get("brightness", 0)),
         )
         projects_to_create = int(has_photos) + int(has_videos)
         if projects_to_create:
@@ -314,6 +359,10 @@ def _stream_import_media(payload: dict[str, Any]) -> None:
             has_videos,
         )
         outcome = {
+            # Preserve the source used for this import. The UI continues to
+            # monitor mounted media after an import finishes, so its selected
+            # source can change before the user confirms cleanup.
+            "source": str(source),
             "photos_imported": summary.photos_imported,
             "videos_imported": summary.videos_imported,
             "skipped": summary.skipped,
@@ -340,8 +389,34 @@ def _generate_jpgs(payload: dict[str, Any]) -> dict[str, Any]:
     summary = UneditedJpgService().generate_for_event(
         Path(str(payload["event_folder"])),
         regenerate_all=bool(payload.get("regenerate_all", False)),
+        brightness=int(payload.get("brightness", 0)),
     )
     return asdict(summary)
+
+
+def _stream_generate_jpgs(payload: dict[str, Any]) -> None:
+    def progress_callback(progress: UneditedJpgProgress) -> None:
+        _emit_stream_event(
+            "progress",
+            current=progress.current,
+            total=progress.total,
+            current_file=str(progress.current_file) if progress.current_file else "",
+            message=progress.message or "Generating JPGs…",
+        )
+
+    try:
+        _emit_stream_event("progress", current=0, total=0, message="Preparing JPGs…")
+        summary = UneditedJpgService().generate_for_event(
+            Path(str(payload["event_folder"])),
+            regenerate_all=bool(payload.get("regenerate_all", False)),
+            brightness=int(payload.get("brightness", 0)),
+            progress_callback=progress_callback,
+        )
+    except Exception as exc:
+        _emit_stream_event("error", error=str(exc))
+        return
+
+    _emit_stream_event("completed", result=asdict(summary))
 
 
 def _cleanup_imported_media(payload: dict[str, Any]) -> dict[str, Any]:
@@ -358,7 +433,10 @@ def _cleanup_imported_media(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _update_media_counts(payload: dict[str, Any]) -> dict[str, Any]:
-    result = MediaCountService().update_event_root_counts(Path(str(payload["event_root"])))
+    root = str(payload.get("event_root", "")).strip()
+    if not root:
+        raise ValueError("Choose an event folder first.")
+    result = MediaCountService().update_event_root_counts(Path(root))
     return {
         "found": result.found,
         "updated": result.updated,
@@ -369,7 +447,10 @@ def _update_media_counts(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sync_google_sheets(payload: dict[str, Any]) -> dict[str, Any]:
-    result = SyncService().sync_event_root(Path(str(payload["event_root"])))
+    root = str(payload.get("event_root", "")).strip()
+    if not root:
+        raise ValueError("Choose an event folder first.")
+    result = SyncService().sync_event_root(Path(root))
     return {
         "found": result.found,
         "synced": result.synced,
@@ -434,6 +515,7 @@ def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         "config": lambda _payload: _config(),
         "available_sources": _available_sources,
         "create_event": _create_event,
+        "inspect_existing_event": _inspect_existing_event,
         "scan_media": lambda values: _scan_result(
             ImportService().scan_media(
                 Path(str(values["source"])),
@@ -467,6 +549,10 @@ def _save_settings(payload: dict[str, Any]) -> dict[str, Any]:
         str(payload.get("google_sheets_spreadsheet_id", "")),
         str(payload.get("google_sheets_worksheet_name", "Events")),
     )
+    AppConfig.set_project_templates(
+        str(payload.get("lightroom_template_dir", "")),
+        str(payload.get("premiere_template", "")),
+    )
     return _config()
 
 
@@ -493,6 +579,9 @@ def main() -> None:
         payload = request.get("payload", {})
         if command == "import_media_stream":
             _stream_import_media(payload)
+            return
+        if command == "generate_jpgs_stream":
+            _stream_generate_jpgs(payload)
             return
         data = _dispatch(command, payload)
         print(json.dumps({"ok": True, "data": data}, default=str))

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UserNotifications
 
 @main
 struct EventControlCenterApp: App {
@@ -19,12 +20,24 @@ struct EventControlCenterApp: App {
     }
 }
 
-final class EventControlCenterDelegate: NSObject, NSApplicationDelegate {
+final class EventControlCenterDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        if Bundle.main.bundleURL.pathExtension == "app",
+           Bundle.main.bundleIdentifier != nil {
+            UNUserNotificationCenter.current().delegate = self
+        }
         DispatchQueue.main.async {
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
     }
 
     func applicationShouldHandleReopen(
@@ -65,6 +78,17 @@ final class AppState: ObservableObject {
         var result: CreatedEvent?
         await perform(showSuccess: false) {
             result = try await self.request("create_event", payload: payload)
+        }
+        return result
+    }
+
+    func inspectExistingEvent(folder: String) async -> ExistingEventInfo? {
+        struct Payload: Codable { let eventFolder: String }
+        var result: ExistingEventInfo?
+        await perform(showSuccess: false) {
+            result = try await self.request(
+                "inspect_existing_event", payload: Payload(eventFolder: folder)
+            )
         }
         return result
     }
@@ -132,6 +156,59 @@ final class AppState: ObservableObject {
         return result
     }
 
+    func notifyCardSafety(title: String, message: String) {
+        sendNotification(title: title, message: message, prefix: "card-safety")
+    }
+
+    func notifyImportFinished(eventName: String, outcome: ImportOutcome) {
+        let issueCount = outcome.failures.count
+        let title = issueCount == 0 ? "Import complete" : "Import finished with issues"
+        let summary = "\(outcome.photosImported) photos and \(outcome.videosImported) videos imported."
+        let issueText = issueCount == 0 ? "" : " \(issueCount) issue(s) need review."
+        sendNotification(
+            title: title,
+            message: "\(eventName): \(summary)\(issueText)",
+            prefix: "import-finished"
+        )
+    }
+
+    private func sendNotification(title: String, message: String, prefix: String) {
+        // `swift run` launches a bare executable, not an application bundle.
+        // UserNotifications raises an Objective-C exception (which Swift cannot
+        // catch) if asked for the current center without a bundle proxy.
+        guard Bundle.main.bundleURL.pathExtension == "app",
+              Bundle.main.bundleIdentifier != nil else {
+            return
+        }
+
+        Task {
+            let center = UNUserNotificationCenter.current()
+            let settings = await center.notificationSettings()
+            let authorization: UNAuthorizationStatus
+
+            if settings.authorizationStatus == .notDetermined {
+                let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
+                authorization = granted ? .authorized : .denied
+            } else {
+                authorization = settings.authorizationStatus
+            }
+
+            guard authorization == .authorized || authorization == .provisional else { return }
+
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = message
+            content.sound = .default
+            try? await center.add(
+                UNNotificationRequest(
+                    identifier: "\(prefix)-\(UUID().uuidString)",
+                    content: content,
+                    trigger: nil
+                )
+            )
+        }
+    }
+
     func search(source: String) async -> SearchIndex? {
         struct Payload: Codable { let source: String }
         var result: SearchIndex?
@@ -149,13 +226,42 @@ final class AppState: ObservableObject {
         }
     }
 
-    func generateJPGs(folder: String, regenerateAll: Bool) async -> JPGResult? {
-        struct Payload: Codable { let eventFolder: String; let regenerateAll: Bool }
-        var result: JPGResult?
-        await perform(showSuccess: false) {
-            result = try await self.request("generate_jpgs", payload: Payload(eventFolder: folder, regenerateAll: regenerateAll))
+    func generateJPGs(
+        folder: String,
+        regenerateAll: Bool,
+        brightness: Int,
+        onProgress: @escaping (JPGStreamEvent) -> Void
+    ) async -> JPGResult? {
+        struct Payload: Codable { let eventFolder: String; let regenerateAll: Bool; let brightness: Int }
+        guard let client else {
+            errorMessage = "The Python backend is unavailable."
+            return nil
         }
-        return result
+
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            let events = try client.jpgEvents(
+                payload: Payload(eventFolder: folder, regenerateAll: regenerateAll, brightness: brightness)
+            )
+            var result: JPGResult?
+            for try await event in events {
+                if event.type == "progress" {
+                    onProgress(event)
+                } else if event.type == "error" {
+                    throw BackendError.failed(event.error ?? "JPG generation failed.")
+                } else if event.type == "completed" {
+                    result = event.result
+                }
+            }
+            guard let result else {
+                throw BackendError.failed("JPG generation stopped before returning a summary.")
+            }
+            return result
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
+        }
     }
 
     func updateMediaCounts(root: String) async -> CountResult? {
