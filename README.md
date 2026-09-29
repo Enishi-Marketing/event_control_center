@@ -16,7 +16,10 @@ it because it is not notarized. After trying to open it, go to **System
 Settings → Privacy & Security → Open Anyway**, enter the Mac login password,
 and click **Open**. macOS saves that exception for future launches. The disk
 image contains the same instructions in `Install Event Control Center.txt`.
-Future updates may require approval again. See [Apple's first-open instructions](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unidentified-developer-mh40617/mac).
+The app checks for signed updates from GitHub Releases whenever it opens and
+uses Sparkle to download and install them automatically. macOS may still ask
+for authorization or first-open approval on a staff Mac. See [Apple's
+first-open instructions](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unidentified-developer-mh40617/mac).
 
 On first launch, Settings opens so each person can choose their shared-drive
 Events folder and local Events folder. The school-year folder is created below
@@ -41,6 +44,8 @@ source folders are never offered for deletion or ejection. Detected writable
 removable cards still offer optional cleanup after import. The app sends a
 macOS notification when an import finishes; macOS may ask for notification
 permission the first time.
+
+Click a keyword chip to remove it from an event before saving.
 
 This build targets the CPU architecture of the Mac on which it is built. Build
 on Apple Silicon for Apple Silicon staff Macs; an Intel build needs an Intel
@@ -112,6 +117,33 @@ This creates `dist/Event Control Center vX.Y.Z.dmg` and a SHA-256 checksum file.
 Share the DMG with staff through the school's normal file-sharing channel. To
 bump `VERSION` and build in one step, use `scripts/release_macos_app.sh`; it
 accepts `patch`, `minor`, `major`, or `--version X.Y.Z`.
+
+### Publish an automatic update
+
+Sparkle checks a signed `appcast.xml` attached to the latest GitHub Release.
+The release repository must be publicly readable so staff Macs can download
+updates without a GitHub login. The source repository may remain private; use
+a separate public repository for release assets if needed. Set the same
+`RELEASE_REPOSITORY` when building the app and preparing each release:
+
+```bash
+export RELEASE_REPOSITORY='OWNER/PUBLIC_RELEASE_REPO'
+scripts/package_staff_dmg.sh
+scripts/prepare_github_release.sh
+```
+
+Create a GitHub Release tagged `vX.Y.Z` in that repository and attach the three
+files from `build/github-release`: the DMG, its `.sha256`, and the signed
+`appcast.xml`. The app's embedded feed points to that repository's latest
+release. Use a higher `VERSION` for every new release. Sparkle signs the update
+archive and feed with an EdDSA key stored in this build Mac's login Keychain;
+back up that key securely using Sparkle's `generate_keys -x` before replacing
+this Mac. Never commit or upload the private key.
+
+Updates replace the `.app` bundle. Each Mac's paths and credentials stay in
+`~/Library/Application Support/Event Control Center/local_settings.conf`, and
+interface preferences stay in macOS user defaults, so an app replacement does
+not reset them.
 
 The free release cannot avoid macOS's first-open approval. Do not strip the
 quarantine attribute or turn off Gatekeeper on staff Macs. Apple documents the

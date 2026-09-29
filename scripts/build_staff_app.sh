@@ -27,6 +27,12 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "VERSION must contain a version like 1.2.3."
   exit 1
 fi
+RELEASE_REPOSITORY="${RELEASE_REPOSITORY:-Enishi-Marketing/event_control_center}"
+if [[ ! "$RELEASE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+  echo "RELEASE_REPOSITORY must be a GitHub owner/repository name."
+  exit 1
+fi
+UPDATE_FEED_URL="https://github.com/$RELEASE_REPOSITORY/releases/latest/download/appcast.xml"
 
 export PYINSTALLER_CONFIG_DIR="${PYINSTALLER_CONFIG_DIR:-$PWD/.pyinstaller}"
 "$PYTHON_BIN" -m PyInstaller EventControlBackend.spec --noconfirm --clean
@@ -34,8 +40,10 @@ swift build --package-path swiftui --configuration release --scratch-path "$PWD/
 
 APP_PATH="$PWD/dist/Event Control Center.app"
 rm -rf "$APP_PATH"
-mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
+mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources" "$APP_PATH/Contents/Frameworks"
 cp "$PWD/build/swift/release/EventControlCenter" "$APP_PATH/Contents/MacOS/EventControlCenter"
+ditto "$PWD/build/swift/release/Sparkle.framework" "$APP_PATH/Contents/Frameworks/Sparkle.framework"
+install_name_tool -add_rpath '@executable_path/../Frameworks' "$APP_PATH/Contents/MacOS/EventControlCenter"
 ditto "$PWD/dist/EventControlBackend" "$APP_PATH/Contents/Resources/backend"
 cp assets/app_icon.icns "$APP_PATH/Contents/Resources/AppIcon.icns"
 
@@ -55,6 +63,12 @@ cat > "$APP_PATH/Contents/Info.plist" <<EOF
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>SUFeedURL</key><string>$UPDATE_FEED_URL</string>
+  <key>SUPublicEDKey</key><string>EH6wT4wm4aYsP/IXBs0/O5jhRHN5SylhovFi4Yjg9/A=</string>
+  <key>SUEnableAutomaticChecks</key><true/>
+  <key>SUAutomaticallyUpdate</key><true/>
+  <key>SUVerifyUpdateBeforeExtraction</key><true/>
+  <key>SURequireSignedFeed</key><true/>
 </dict></plist>
 EOF
 printf 'APPL????' > "$APP_PATH/Contents/PkgInfo"

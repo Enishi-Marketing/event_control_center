@@ -27,8 +27,9 @@ EVENT CONTROL CENTER — INSTALL ON A STAFF MAC
    Events folder, then save.
 
 The app and its Python backend are included. No terminal, Python, or Swift
-installation is needed. Future app updates may need first-launch approval
-again. Keep macOS security settings enabled.
+installation is needed. The app checks for signed updates when it opens and
+installs them automatically when a new release is available. Keep macOS
+security settings enabled.
 EOF
 
 rm -f "$DMG_PATH"

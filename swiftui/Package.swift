@@ -7,7 +7,13 @@ let package = Package(
     products: [
         .executable(name: "EventControlCenter", targets: ["EventControlCenter"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
+    ],
     targets: [
-        .executableTarget(name: "EventControlCenter")
+        .executableTarget(
+            name: "EventControlCenter",
+            dependencies: [.product(name: "Sparkle", package: "Sparkle")]
+        )
     ]
 )

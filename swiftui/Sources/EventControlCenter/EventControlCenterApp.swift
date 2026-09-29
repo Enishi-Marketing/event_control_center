@@ -1,4 +1,5 @@
 import AppKit
+import Sparkle
 import SwiftUI
 import UserNotifications
 
@@ -17,15 +18,35 @@ struct EventControlCenterApp: App {
         }
         .defaultSize(width: 1280, height: 820)
         .windowResizability(.contentMinSize)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { appDelegate.checkForUpdates() }
+            }
+        }
     }
 }
 
 final class EventControlCenterDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+    private var updaterController: SPUStandardUpdaterController?
+
+    func checkForUpdates() {
+        updaterController?.checkForUpdates(nil)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         if Bundle.main.bundleURL.pathExtension == "app",
            Bundle.main.bundleIdentifier != nil {
             UNUserNotificationCenter.current().delegate = self
+            let controller = SPUStandardUpdaterController(
+                startingUpdater: true,
+                updaterDelegate: nil,
+                userDriverDelegate: nil
+            )
+            updaterController = controller
+            if controller.updater.automaticallyChecksForUpdates {
+                controller.updater.checkForUpdatesInBackground()
+            }
         }
         DispatchQueue.main.async {
             NSApp.activate(ignoringOtherApps: true)
