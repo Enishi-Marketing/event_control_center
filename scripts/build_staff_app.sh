@@ -75,6 +75,12 @@ printf 'APPL????' > "$APP_PATH/Contents/PkgInfo"
 
 # A Developer ID identity can be supplied for a notarizable staff release.
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
-codesign --force --deep --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP_PATH"
+if [ "$CODESIGN_IDENTITY" = "-" ]; then
+  # Hardened Runtime library validation rejects ad hoc signed Sparkle in a
+  # separately ad hoc signed host. The no-fee build does not use notarization.
+  codesign --force --deep --sign - "$APP_PATH"
+else
+  codesign --force --deep --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP_PATH"
+fi
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 echo "Built $APP_PATH"
