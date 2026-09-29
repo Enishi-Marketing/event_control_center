@@ -212,7 +212,7 @@ struct ImportView: View {
                     DatePicker("Date", selection: $eventDate, displayedComponents: .date).labelsHidden().datePickerStyle(.compact)
                     Picker("Destination", selection: $destination) {
                         ForEach(ImportDestination.allCases) { Text($0.rawValue).tag($0) }
-                    }.pickerStyle(.menu).frame(width: 180)
+                    }.pickerStyle(.menu).frame(width: 245)
                 }
                 TextField("School year", text: $schoolYear).textFieldStyle(.roundedBorder)
                 TagEditor(tags: $keywords)
