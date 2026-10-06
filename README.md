@@ -4,6 +4,11 @@ Desktop application for an international school multimedia workflow.
 
 ## Hero Library
 
+The photo list stays visible beneath a compact workflow toolbar. Each view shows
+its relevant actions; selection, preview, and bulk metadata editing live in the
+right-hand panel. Choose **Lightroom setup** for the Auto Import walkthrough,
+**Locations** to change folders, or **More** for folder shortcuts and maintenance.
+
 The native app has a **Hero Library** sidebar page. In Finder, tag chosen photos
 `Hero Shot` in the configured event photo roots (including all subfolders).
 Opening Hero Library or choosing **Scan Hero Shot tags** reads directory entries

@@ -20,6 +20,7 @@ struct HeroLibraryView: View {
     @State private var info = ""
     @State private var uncatalogued: [String] = []
     @State private var showSettings = false
+    @State private var showLightroomSetup = false
     @State private var chooseFolder = false
     @State private var folderChoice: FolderChoice = .source
     @State private var sourceRoots: [String] = []
@@ -119,109 +120,96 @@ struct HeroLibraryView: View {
     }
 
     var body: some View {
-        ScrollView {
+        VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top) {
+                HStack(alignment: .center) {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("Hero Library").font(.system(size: 30, weight: .bold, design: .rounded))
-                        Text("Review chosen photos, track Lightroom edits, and browse the finished library.")
-                            .foregroundStyle(.secondary)
+                        Text("Hero Library").font(.system(size: 28, weight: .bold, design: .rounded))
+                        Text("Choose photos. Edit when needed. Publish to your shared library.")
+                            .font(.subheadline).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Locations", systemImage: "gearshape") { showSettings.toggle() }
+                    Button("Lightroom setup", systemImage: "questionmark.circle") { showLightroomSetup = true }
+                    Button("Locations", systemImage: "folder.badge.gearshape") { showSettings = true }
                 }
-                if showSettings { settingsCard }
-                if let workspace {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("Lightroom Classic setup").font(.subheadline.weight(.semibold))
-                        Text("Open the Hero Library Catalog. In Lightroom, set File → Auto Import → Auto Import Settings: Watched Folder = the empty Incoming folder; Move To = Working Lightroom Edits. Keep original filenames. Turn on Auto Import, then use Send to Lightroom here. Export full-quality finished photos to the separate Exports folder with the ECC Asset ID at the start of each filename. ECC makes WEB versions when you push.")
-                        Text("Queued locally: \(workspace.queuePath)")
-                        Text("Incoming: \(workspace.incomingPath)")
-                        Text("Working: \(workspace.workingPath)")
-                        Text("Exports: \(workspace.exportPath)")
-                    }.font(.caption).textSelection(.enabled)
-                        .padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                }
-                HStack {
-                    Picker("View", selection: $tab) {
-                        ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }.pickerStyle(.segmented).frame(width: 660)
-                    Spacer()
-                    TextField("Search Hero Library", text: $query).textFieldStyle(.roundedBorder).frame(width: 245)
-                }
-                HStack(spacing: 10) {
-                    Button("Scan Hero Shot tags", systemImage: "arrow.clockwise") { Task { await scanTags() } }
-                    Button("Stage next batch", systemImage: "square.and.arrow.down") { Task { await stageNextBatch() } }
-                        .disabled(isStaging)
-                    Picker("Batch", selection: $batchSize) {
-                        Text("3 photos").tag(3)
-                        Text("5 photos").tag(5)
-                        Text("10 photos").tag(10)
-                    }.frame(width: 130)
-                    Spacer()
-                    Button("Open Lightroom Catalog", systemImage: "camera.aperture") { Task { await openCatalog() } }
-                    Button("Open Needs Edit", systemImage: "folder") { Task { await openNeedsEdit() } }
-                }
-                .disabled(isPublishing)
-                HStack(spacing: 10) {
-                    Button("Send queued to Lightroom", systemImage: "arrow.right") {
-                        Task { await stage(assets.filter { $0.removedAt == nil && $0.editState == "NEEDS_EDIT" && $0.needsEditPath != nil }.map(\.assetId)) }
-                    }
-                    Button("Check Lightroom exports", systemImage: "arrow.clockwise") { Task { await matchExports() } }
-                    Button("Refresh Drive folders", systemImage: "square.grid.2x2") { Task { await reorganizeDrive() } }
-                    Button("Review staff additions", systemImage: "person.crop.rectangle.stack") { Task { await auditDrive() } }
-                    Spacer()
-                    Button("Move Lightroom exports to Drive", systemImage: "icloud.and.arrow.up") {
-                        Task { await preparePush() }
-                    }.buttonStyle(.borderedProminent)
-                }
-                .disabled(app.isWorking || isPublishing)
-                if tab == .library {
+                Picker("Library view", selection: $tab) {
+                    ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }.pickerStyle(.segmented).labelsHidden()
+                workflowToolbar
+            }
+            .padding(24)
+            Divider()
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Text("Published files use their event name, date, and photo number.")
-                            .font(.caption).foregroundStyle(.secondary)
+                        Text("\(visible.count) photos").font(.subheadline.weight(.semibold))
                         Spacer()
-                        Button("Update existing filenames", systemImage: "textformat") { confirmRename = true }
-                            .disabled(app.isWorking || isPublishing)
+                        Button(selected.isEmpty ? "Select all" : "Clear selection") {
+                            selected = selected.isEmpty ? Set(visible.map(\.assetId)) : []
+                        }.buttonStyle(.link).disabled(visible.isEmpty || isPublishing)
+                        TextField("Search photos", text: $query)
+                            .textFieldStyle(.roundedBorder).frame(maxWidth: 230)
+                    }
+                    if !info.isEmpty {
+                        Text(info).font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(2).help(info)
+                    }
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            if !uncatalogued.isEmpty { staffAdditionsCard }
+                            if visible.isEmpty {
+                                ContentUnavailableView(
+                                    query.isEmpty ? "No photos in this view" : "No matching photos",
+                                    systemImage: "photo.stack",
+                                    description: Text(emptyMessage)
+                                ).frame(maxWidth: .infinity, minHeight: 250)
+                            } else {
+                                assetList
+                            }
+                        }
                     }
                 }
-                Text("\(visible.count) shown · \(selected.count) selected · \(readyAssets.count) ready for Drive")
-                    .font(.caption).foregroundStyle(.secondary)
-                if !info.isEmpty { Text(info).font(.subheadline).foregroundStyle(.secondary) }
-                if !uncatalogued.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Uncatalogued Drive photos").font(.headline)
-                        Text("These photos were added directly to Drive. Add a reviewed photo to ECC to assign an Asset ID; its original Drive file stays in place as the source.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        ForEach(uncatalogued, id: \.self) { path in
-                            HStack {
-                                Text(path).lineLimit(1).textSelection(.enabled)
-                                Spacer()
-                                Button("Show in Finder") {
-                                    NSWorkspace.shared.selectFile((publishRoot as NSString).appendingPathComponent(path), inFileViewerRootedAtPath: "")
-                                }
-                                Button("Add to ECC") { Task { await adoptDrive(path) } }
-                                    .disabled(app.isWorking)
-                            }.font(.caption)
+                .padding(20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                Divider()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        if let asset = singleAsset { detail(asset) }
+                        if selected.isEmpty {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Label("Photo details", systemImage: "sidebar.right").font(.headline)
+                                Text("Select a photo to preview it and edit its metadata. Select several to apply changes together.")
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                            }.padding(20)
+                        } else {
+                            actionsCard
                         }
-                    }.padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .padding(16)
                 }
-                if !selected.isEmpty { actionsCard }
-                if visible.isEmpty {
-                    ContentUnavailableView(
-                        tab == .library ? "No published Hero photos yet" : "No photos here yet",
-                        systemImage: "photo.stack",
-                        description: Text(tab == .library ? "Publish reviewed photos to see them here." : "Photos matching this view will appear here.")
-                    ).frame(minHeight: 230)
-                } else {
-                    HStack(alignment: .top, spacing: 16) {
-                        assetList.frame(maxWidth: .infinity)
-                        if let asset = singleAsset { detail(asset).frame(width: 275) }
+                .frame(width: 330)
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.35))
+            }
+        }
+        .sheet(isPresented: $showLightroomSetup) { lightroomSetupSheet }
+        .sheet(isPresented: $showSettings) {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    Text("Hero Library locations").font(.title2.bold())
+                    Spacer()
+                    Button("Done") { showSettings = false }.keyboardShortcut(.cancelAction)
+                }
+                settingsCard
+            }.padding(24).frame(width: 650)
+            .fileImporter(isPresented: $chooseFolder, allowedContentTypes: [.folder]) { result in
+                if case .success(let url) = result {
+                    switch folderChoice {
+                    case .source: if !sourceRoots.contains(url.path) { sourceRoots.append(url.path) }
+                    case .workspace: workspaceRoot = url.path
+                    case .publish: publishRoot = url.path
                     }
                 }
             }
-            .padding(28)
-            .frame(maxWidth: 1200, alignment: .leading)
         }
         .task {
             fillSettings()
@@ -253,15 +241,6 @@ struct HeroLibraryView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("ECC names files with their event, date, and event photo number, then updates its catalog. Links that use the old filenames may need updating.")
-        }
-        .fileImporter(isPresented: $chooseFolder, allowedContentTypes: [.folder]) { result in
-            if case .success(let url) = result {
-                switch folderChoice {
-                case .source: if !sourceRoots.contains(url.path) { sourceRoots.append(url.path) }
-                case .workspace: workspaceRoot = url.path
-                case .publish: publishRoot = url.path
-                }
-            }
         }
         .overlay(alignment: .bottom) {
             if isPublishing {
@@ -331,7 +310,7 @@ struct HeroLibraryView: View {
             HeroAssetPreview(asset: asset, size: 240)
                 .frame(maxWidth: .infinity)
             Text(asset.assetId).font(.headline)
-            Text(asset.sourcePath).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+            Text(displayFilename(asset)).font(.subheadline).lineLimit(2)
             if let date = asset.eventDate, !date.isEmpty { Text(date).font(.caption) }
             if let year = asset.schoolYear, !year.isEmpty { Text("School year: \(year)").font(.caption) }
             if !asset.eventGrades.isEmpty { Text("Event grades: \(asset.eventGrades.joined(separator: ", "))").font(.caption) }
@@ -340,88 +319,234 @@ struct HeroLibraryView: View {
             if !asset.eventDescription.isEmpty { Text(asset.eventDescription).font(.caption) }
             if !asset.grades.isEmpty { Text("Photo grades: \(asset.grades.joined(separator: ", "))").font(.caption) }
             if !asset.browseGroup.isEmpty { Text("Browse folder: \(asset.browseGroup)").font(.caption) }
-            if let master = asset.masterPath { Text("MASTER: \(master)").font(.caption2).textSelection(.enabled) }
-            if let matched = asset.matchedLibraryPath { Text("Already in a Drive library: \(matched)").font(.caption2).textSelection(.enabled) }
+            DisclosureGroup("File locations") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Source: \(asset.sourcePath)")
+                    if let master = asset.masterPath { Text("MASTER: \(master)") }
+                    if let matched = asset.matchedLibraryPath { Text("Drive match: \(matched)") }
+                }.font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+            }
         }
-        .padding(14).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .padding(0)
     }
 
     private var actionsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Selected photos").font(.headline)
+        VStack(alignment: .leading, spacing: 16) {
+            Text("\(selected.count) selected").font(.headline)
             if tab == .removed {
-                Button("Restore to Library") { Task { await restoreSelected() } }
-                    .disabled(app.isWorking)
+                Button("Restore to Library", systemImage: "arrow.uturn.backward") { Task { await restoreSelected() } }
+                    .buttonStyle(.borderedProminent)
             } else {
                 if tab == .organize {
-                    HStack {
+                    Button("Send selected to Lightroom", systemImage: "arrow.right") { Task { await stage(Array(selected)) } }
+                        .disabled(selectedAssets.contains { $0.needsEditPath == nil })
+                        .help("Stage photos locally before sending them to Lightroom.")
+                    Button("Publish originals", systemImage: "icloud.and.arrow.up") {
+                        pendingOriginalIDs = selectedAssets.map(\.assetId)
+                        confirmOriginalPush = true
+                    }.buttonStyle(.borderedProminent).disabled(!canPushSelectedOriginals)
+                    Text("Publish finished JPEG, PNG, TIFF, or HEIC photos directly when no editing is needed.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Menu("Review status") {
                         Button("Needs edit") { Task { await setState("NEEDS_EDIT") } }
-                        Button("Send to Lightroom") { Task { await stage(Array(selected)) } }
-                        Button("Use original") { Task { await setState("APPROVED_AS_IS") } }
-                        Button("Publish original (no edit)") {
-                            pendingOriginalIDs = selectedAssets.map(\.assetId)
-                            confirmOriginalPush = true
-                        }.disabled(!canPushSelectedOriginals)
-                        Button("Push selected to Drive") { confirmSelectedPush() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(selectedAssets.contains { $0.editState != "APPROVED_AS_IS" })
-                    }.disabled(app.isWorking || isPublishing)
+                        Button("Original ready") { Task { await setState("APPROVED_AS_IS") } }
+                    }.fixedSize()
                 }
                 if tab == .lightroom {
-                    Button("Push selected to Drive") { confirmSelectedPush() }
+                    Button("Publish selected exports", systemImage: "icloud.and.arrow.up") { confirmSelectedPush() }
                         .buttonStyle(.borderedProminent)
-                        .disabled(app.isWorking || isPublishing || selectedAssets.contains { $0.editState != "READY_TO_PUBLISH" })
+                        .disabled(selectedAssets.contains { $0.editState != "READY_TO_PUBLISH" })
                 }
-                HStack {
-                    Button("Feature") { Task { await update(["featured": .flag(true)]) } }
-                    Button("Unfeature") { Task { await update(["featured": .flag(false)]) } }
-                    Spacer()
-                    Button("Remove from Library", role: .destructive) { confirmRemove = true }
-                }.disabled(app.isWorking || isPublishing)
-            }
-            if tab != .removed {
                 Divider()
-                Text("Bulk metadata").font(.subheadline.weight(.semibold))
+                DisclosureGroup("Edit metadata") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Menu(grades.isEmpty ? "Grades" : "Grades (\(grades.count))") {
+                                ForEach(gradeOptions, id: \.self) { grade in
+                                    Toggle(grade, isOn: Binding(get: { grades.contains(grade) }, set: { if $0 { grades.insert(grade) } else { grades.remove(grade) } }))
+                                }
+                            }
+                            Menu(sections.isEmpty ? "Sections" : "Sections (\(sections.count))") {
+                                ForEach(sectionOptions, id: \.self) { section in
+                                    Toggle(section, isOn: Binding(get: { sections.contains(section) }, set: { if $0 { sections.insert(section) } else { sections.remove(section) } }))
+                                }
+                            }
+                        }
+                        Picker("Category", selection: $category) {
+                            Text("No change").tag("")
+                            ForEach(categories, id: \.self) { Text($0).tag($0) }
+                        }
+                        Picker("Library folder", selection: $browseGroup) {
+                            Text("Auto").tag("")
+                            ForEach(browseGroups, id: \.self) { Text($0).tag($0) }
+                        }
+                        TextField("Subject or activity", text: $subject)
+                        TextField("Setting", text: $setting)
+                        TagEditor(tags: $extraKeywords, draft: $keywordDraft, suggestions: keywordSuggestions)
+                        Text("Only filled fields are applied to the selected photos.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Apply metadata & organize") { Task { await applyMetadata() } }
+                    }.textFieldStyle(.roundedBorder).padding(.top, 10)
+                }
                 HStack {
-                Menu("Grades") {
-                    ForEach(gradeOptions, id: \.self) { grade in
-                        Toggle(grade, isOn: Binding(get: { grades.contains(grade) }, set: { if $0 { grades.insert(grade) } else { grades.remove(grade) } }))
-                    }
+                    Button("Feature", systemImage: "star") { Task { await update(["featured": .flag(true)]) } }
+                    Button("Unfeature") { Task { await update(["featured": .flag(false)]) } }
                 }
-                Menu("Sections") {
-                    ForEach(sectionOptions, id: \.self) { section in
-                        Toggle(section, isOn: Binding(get: { sections.contains(section) }, set: { if $0 { sections.insert(section) } else { sections.remove(section) } }))
-                    }
-                }
-                Picker("Category", selection: $category) {
-                    Text("Choose category").tag("")
-                    ForEach(categories, id: \.self) { Text($0).tag($0) }
-                }.frame(width: 220)
-                }
-                HStack {
-                    Picker("Library folder", selection: $browseGroup) {
-                        Text("Auto").tag("")
-                        ForEach(browseGroups, id: \.self) { Text($0).tag($0) }
-                    }.frame(width: 290)
-                    Text("One browse folder per photo; event and activity remain searchable metadata.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                HStack {
-                TextField("Subject or activity", text: $subject)
-                TextField("Setting", text: $setting)
-                Button("Apply metadata & organize") { Task { await applyMetadata() } }
-                }.textFieldStyle(.roundedBorder).disabled(app.isWorking)
-                TagEditor(tags: $extraKeywords, draft: $keywordDraft, suggestions: keywordSuggestions)
-                Text("Only filled fields are applied. Tags are embedded in published files; Drive additions move into the matching Library folder.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Divider()
+                Button("Remove from Library", systemImage: "trash", role: .destructive) { confirmRemove = true }
             }
         }
-        .padding(18).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .disabled(app.isWorking || isPublishing || isStaging)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var queuedIDs: [String] {
+        assets.filter { $0.removedAt == nil && $0.matchedLibraryPath == nil && $0.editState == "NEEDS_EDIT" && $0.needsEditPath != nil }.map(\.assetId)
+    }
+
+    private var emptyMessage: String {
+        if !query.isEmpty { return "Try another search or clear the search field." }
+        switch tab {
+        case .organize: return "Scan Finder’s Hero Shot tags, then stage a small batch to review."
+        case .lightroom: return "Send queued photos to Lightroom. Check exports when your edits are finished."
+        case .library: return "Your published photos and existing Drive matches appear here."
+        case .featured: return "Feature selected photos to keep your best images together."
+        case .removed: return "Removed photos appear here and can be restored."
+        }
+    }
+
+    private var workflowToolbar: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) { workflowActions; Spacer(minLength: 8); moreMenu }
+            VStack(alignment: .leading, spacing: 10) {
+                workflowActions
+                moreMenu
+            }
+        }
+        .controlSize(.large)
+        .disabled(app.isWorking || isPublishing || isStaging)
+    }
+
+    @ViewBuilder private var workflowActions: some View {
+        switch tab {
+        case .organize:
+            HStack(spacing: 10) {
+                Button("Scan tags", systemImage: "arrow.clockwise") { Task { await scanTags() } }
+                Button(isStaging ? "Staging…" : "Stage next batch", systemImage: "square.and.arrow.down") { Task { await stageNextBatch() } }
+                    .buttonStyle(.borderedProminent)
+                Picker("Batch size", selection: $batchSize) {
+                    Text("3 photos").tag(3); Text("5 photos").tag(5); Text("10 photos").tag(10)
+                }.labelsHidden().frame(width: 100)
+                Button("Send queued (\(queuedIDs.count))", systemImage: "arrow.right") { Task { await stage(queuedIDs) } }
+                    .disabled(queuedIDs.isEmpty)
+            }
+        case .lightroom:
+            HStack(spacing: 10) {
+                Button("Check exports", systemImage: "arrow.clockwise") { Task { await matchExports() } }
+                Button("Publish ready (\(readyAssets.filter { $0.editState == "READY_TO_PUBLISH" }.count))", systemImage: "icloud.and.arrow.up") {
+                    pendingPushIDs = readyAssets.filter { $0.editState == "READY_TO_PUBLISH" }.map(\.assetId)
+                    confirmPush = true
+                }.buttonStyle(.borderedProminent)
+                    .disabled(!readyAssets.contains { $0.editState == "READY_TO_PUBLISH" })
+                Button("Open Lightroom", systemImage: "camera.aperture") { Task { await openCatalog() } }
+            }
+        case .library:
+            Button("Review staff additions", systemImage: "person.crop.rectangle.stack") { Task { await auditDrive() } }
+        case .featured:
+            Label("Your selected highlights", systemImage: "star").foregroundStyle(.secondary)
+        case .removed:
+            Label("Select photos to restore them", systemImage: "arrow.uturn.backward").foregroundStyle(.secondary)
+        }
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            if tab != .organize {
+                Button("Scan Hero Shot tags", systemImage: "arrow.clockwise") { Task { await scanTags() } }
+                Divider()
+            }
+            Button("Open Lightroom Catalog", systemImage: "camera.aperture") { Task { await openCatalog() } }
+            Button("Open editing workspace", systemImage: "folder") { Task { await openNeedsEdit() } }
+            Button("Open shared library", systemImage: "externaldrive") { NSWorkspace.shared.open(URL(fileURLWithPath: publishRoot)) }
+                .disabled(publishRoot.isEmpty)
+            if tab == .library {
+                Divider()
+                Button("Refresh Drive folders", systemImage: "square.grid.2x2") { Task { await reorganizeDrive() } }
+                Button("Update existing filenames", systemImage: "textformat") { confirmRename = true }
+            }
+        } label: { Label("More", systemImage: "ellipsis.circle") }
+        .fixedSize()
+    }
+
+    private var staffAdditionsCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Staff additions · \(uncatalogued.count)").font(.headline)
+            Text("Review photos added directly to Drive before adding them to ECC.")
+                .font(.caption).foregroundStyle(.secondary)
+            ForEach(uncatalogued, id: \.self) { path in
+                HStack {
+                    Text((path as NSString).lastPathComponent).lineLimit(1).help(path)
+                    Spacer()
+                    Button("Show") { NSWorkspace.shared.selectFile((publishRoot as NSString).appendingPathComponent(path), inFileViewerRootedAtPath: "") }
+                    Button("Add to ECC") { Task { await adoptDrive(path) } }.disabled(app.isWorking)
+                }.font(.caption)
+            }
+        }.padding(16).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var lightroomSetupSheet: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Lightroom Classic setup").font(.title2.bold())
+                    Text("Set up Auto Import once, then edit each batch in Lightroom.")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { showLightroomSetup = false }.keyboardShortcut(.cancelAction)
+            }
+            if let workspace {
+                setupStep("1", title: "Open the Hero Library catalog", description: "Use ECC’s dedicated catalog for your Hero photos.")
+                Button("Open Lightroom Catalog", systemImage: "camera.aperture") { Task { await openCatalog() } }
+                Divider()
+                setupStep("2", title: "Configure Auto Import in Lightroom", description: "Choose File → Auto Import → Auto Import Settings. Set Watched Folder to the empty Incoming folder and Move To to Working Lightroom Edits. Keep original filenames, then enable Auto Import.")
+                setupFolder("Watched folder", path: workspace.incomingPath)
+                setupFolder("Move to", path: workspace.workingPath)
+                Divider()
+                setupStep("3", title: "Send a batch, edit, and export", description: "Stage photos in ECC and choose Send queued. Export finished, full-quality photos to Exports, keeping the ECC Asset ID at the start of each filename. Back in In Lightroom, choose Check exports, then Publish ready. ECC creates the smaller WEB copies for you.")
+                setupFolder("Export folder", path: workspace.exportPath)
+            } else {
+                ProgressView("Loading editing workspace…")
+            }
+        }
+        .padding(28).frame(width: 640)
+    }
+
+    private func setupStep(_ number: String, title: String, description: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(number).font(.headline).frame(width: 28, height: 28)
+                .background(.cyan.opacity(0.16), in: Circle())
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title).font(.headline)
+                Text(description).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func setupFolder(_ label: String, path: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(label).font(.subheadline.weight(.medium))
+                Spacer()
+                Button("Open folder", systemImage: "folder") { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
+            }
+            Text(path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }.padding(12).background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var settingsCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Hero Library locations").font(.headline)
             Text("Scan Hero Shot tags reads Finder metadata. Stage next batch copies a small group into local Needs Edit. Google Drive receives files only when you push finished photos.")
                 .font(.caption).foregroundStyle(.secondary)
             ForEach(sourceRoots, id: \.self) { root in
@@ -478,7 +603,7 @@ struct HeroLibraryView: View {
         guard let paths = await app.heroWorkspace() else { return }
         workspace = paths
         NSWorkspace.shared.open(URL(fileURLWithPath: paths.catalogPath))
-        info = "In Lightroom Classic, set Auto Import to watch Incoming and move files to Working. Export finished files to Exports with their ECC Asset ID at the start of the filename."
+        info = "Opened the Hero Library catalog in Lightroom Classic."
     }
     private func openNeedsEdit() async {
         guard let paths = await app.heroWorkspace() else { return }
@@ -637,6 +762,8 @@ struct HeroLibraryView: View {
     private func saveSettings() async {
         await app.heroSaveSettings(HeroSettingsPayload(sourceRoots: sourceRoots, workspaceRoot: workspaceRoot, publishRoot: publishRoot))
         fillSettings()
+        workspace = await app.heroWorkspace()
+        showSettings = false
         await scanTags()
     }
 }
