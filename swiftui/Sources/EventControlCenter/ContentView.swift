@@ -93,7 +93,6 @@ struct ImportView: View {
     @State private var keywordSuggestions: [KeywordSuggestion] = []
     @State private var selectedGrades: Set<String> = []
     @State private var currentFolder: String?
-    @State private var usingExistingEvent = false
     @State private var sourcePath = ""
     @State private var sourceIsRemovable = false
     @State private var detectedSources: [ImportSourceInfo] = []
@@ -172,6 +171,11 @@ struct ImportView: View {
                 clearCardSafetyStatus()
             }
         }
+        .onChange(of: destination) { old, new in
+            currentFolder = nil
+            if old == .existingEvent { eventName = "" }
+            if new == .existingEvent { openFolderPicker(.existingEvent) }
+        }
         .alert(
             "Delete verified imported media and eject the card?",
             isPresented: Binding(
@@ -198,87 +202,86 @@ struct ImportView: View {
     private var eventCard: some View {
         Card {
             VStack(alignment: .leading, spacing: 16) {
-                Label("Event details", systemImage: "calendar.badge.plus").font(.headline)
-                if usingExistingEvent, let currentFolder {
-                    Label("Import into existing event", systemImage: "folder.badge.checkmark")
-                        .font(.subheadline.weight(.semibold)).foregroundStyle(.green)
-                    Text(currentFolder).font(.caption).textSelection(.enabled)
-                    Text("Existing metadata stays in place. New media will be added to this event.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    HStack {
-                        Button("Choose another event folder") { openFolderPicker(.existingEvent) }
-                        Button("Create a new event instead") {
-                            usingExistingEvent = false
-                            self.currentFolder = nil
-                            eventName = ""
-                        }
-                    }
-                } else {
-                HStack(alignment: .top, spacing: 16) {
-                    TextField("Event name", text: $eventName).textFieldStyle(.roundedBorder)
-                    DatePicker("Date", selection: $eventDate, displayedComponents: .date).labelsHidden().datePickerStyle(.compact)
+                HStack {
+                    Label("Event details", systemImage: "calendar.badge.plus").font(.headline)
+                    Spacer()
                     Picker("Destination", selection: $destination) {
                         ForEach(ImportDestination.allCases) { Text($0.rawValue).tag($0) }
                     }.pickerStyle(.menu).frame(width: 245)
+                        .disabled(app.isWorking || isImporting)
                 }
-                TextField("School year", text: $schoolYear).textFieldStyle(.roundedBorder)
-                TagEditor(tags: $keywords, draft: $keywordDraft, suggestions: keywordSuggestions)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Description")
-                        .font(.subheadline.weight(.medium))
-                    TextEditor(text: $description)
-                        .font(.body)
-                        .frame(height: 84)
-                        .scrollContentBackground(.hidden)
-                        .padding(8)
-                        .background(.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 10))
-                        .overlay(alignment: .topLeading) {
-                            if description.isEmpty {
-                                Text("Add an optional description")
-                                    .foregroundStyle(.tertiary)
-                                    .padding(.horizontal, 13)
-                                    .padding(.vertical, 14)
-                                    .allowsHitTesting(false)
-                            }
-                        }
-                        .accessibilityLabel("Description")
-                }
-                Divider()
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 135), spacing: 8)], spacing: 8) {
-                    ForEach(Array(gradeGroups.enumerated()), id: \.offset) { _, group in
-                        Menu {
-                            ForEach(group.1, id: \.self) { grade in
-                                Toggle(grade, isOn: Binding(
-                                    get: { selectedGrades.contains(grade) },
-                                    set: { isSelected in
-                                        if isSelected {
-                                            selectedGrades.insert(grade)
-                                        } else {
-                                            selectedGrades.remove(grade)
-                                        }
-                                    }
-                                ))
-                            }
-                        } label: {
-                            Label(group.0, systemImage: "checklist")
-                        }
-                        .menuStyle(.borderedButton)
+                if destination == .existingEvent {
+                    if let currentFolder {
+                        Label(eventName.isEmpty ? "Existing event selected" : eventName, systemImage: "folder.badge.checkmark")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(.green)
+                        Text(currentFolder).font(.caption).textSelection(.enabled)
+                        Text("Existing metadata stays in place. New media will be added to this event.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Choose another event folder") { openFolderPicker(.existingEvent) }
+                            .disabled(app.isWorking || isImporting)
+                    } else {
+                        Text("Choose the existing event folder to add media while keeping its metadata.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                        Button("Choose existing event folder", systemImage: "folder") { openFolderPicker(.existingEvent) }
+                            .disabled(app.isWorking || isImporting)
                     }
-                }
-                HStack {
-                    Toggle("Replace metadata if this event already exists", isOn: $replaceExisting).font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        Task { await createEvent() }
-                    } label: { Label("Create event", systemImage: "folder.badge.plus") }
-                    .buttonStyle(.borderedProminent).disabled(eventName.trimmingCharacters(in: .whitespaces).isEmpty || app.isWorking)
-                }
-                Divider()
-                HStack {
-                    Text("Adding media to an existing event?")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Button("Choose existing event folder") { openFolderPicker(.existingEvent) }
-                }
+                } else {
+                    HStack(alignment: .top, spacing: 16) {
+                        TextField("Event name", text: $eventName).textFieldStyle(.roundedBorder)
+                        DatePicker("Date", selection: $eventDate, displayedComponents: .date).labelsHidden().datePickerStyle(.compact)
+                    }
+                    TextField("School year", text: $schoolYear).textFieldStyle(.roundedBorder)
+                    TagEditor(tags: $keywords, draft: $keywordDraft, suggestions: keywordSuggestions)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Description")
+                            .font(.subheadline.weight(.medium))
+                        TextEditor(text: $description)
+                            .font(.body)
+                            .frame(height: 84)
+                            .scrollContentBackground(.hidden)
+                            .padding(8)
+                            .background(.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 10))
+                            .overlay(alignment: .topLeading) {
+                                if description.isEmpty {
+                                    Text("Add an optional description")
+                                        .foregroundStyle(.tertiary)
+                                        .padding(.horizontal, 13)
+                                        .padding(.vertical, 14)
+                                        .allowsHitTesting(false)
+                                }
+                            }
+                            .accessibilityLabel("Description")
+                    }
+                    Divider()
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 135), spacing: 8)], spacing: 8) {
+                        ForEach(Array(gradeGroups.enumerated()), id: \.offset) { _, group in
+                            Menu {
+                                ForEach(group.1, id: \.self) { grade in
+                                    Toggle(grade, isOn: Binding(
+                                        get: { selectedGrades.contains(grade) },
+                                        set: { isSelected in
+                                            if isSelected {
+                                                selectedGrades.insert(grade)
+                                            } else {
+                                                selectedGrades.remove(grade)
+                                            }
+                                        }
+                                    ))
+                                }
+                            } label: {
+                                Label(group.0, systemImage: "checklist")
+                            }
+                            .menuStyle(.borderedButton)
+                        }
+                    }
+                    HStack {
+                        Toggle("Replace metadata if this event already exists", isOn: $replaceExisting).font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button {
+                            Task { await createEvent() }
+                        } label: { Label("Create event", systemImage: "folder.badge.plus") }
+                        .buttonStyle(.borderedProminent).disabled(eventName.trimmingCharacters(in: .whitespaces).isEmpty || app.isWorking)
+                    }
                 }
             }
         }
@@ -372,12 +375,16 @@ struct ImportView: View {
                     Button { Task { await importSelected() } } label: { Label("Import selected media", systemImage: "square.and.arrow.down.fill") }
                         .buttonStyle(.borderedProminent).disabled(currentFolder == nil || selectedSessions.isEmpty || app.isWorking || isImporting)
                 }
-                if currentFolder == nil { Text("Create the event first to enable importing.").font(.caption).foregroundStyle(.orange) }
+                if currentFolder == nil {
+                    Text(destination == .existingEvent ? "Choose the existing event folder to enable importing." : "Create the event first to enable importing.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
             }
         }
     }
 
     private func createEvent() async {
+        guard destination != .existingEvent else { return }
         let date = DateFormatter.eventDate.string(from: eventDate)
         let finalKeywords = KeywordTags.canonicalized(keywords + [keywordDraft], using: keywordSuggestions)
         let payload = CreateEventPayload(eventName: eventName, eventDate: date, destination: destination.rawValue, schoolYear: schoolYear, description: description, keywords: finalKeywords, grades: selectedGrades.sorted(), allowOverwrite: replaceExisting)
@@ -386,7 +393,6 @@ struct ImportView: View {
             keywordDraft = ""
             await refreshKeywordVocabulary()
             currentFolder = result.eventFolder
-            usingExistingEvent = false
             app.notice = result.alreadyExisted ? "Event metadata was updated." : "Event created and ready for media."
         }
     }
@@ -402,12 +408,12 @@ struct ImportView: View {
 
     private func useExistingEvent(_ folder: String) async {
         guard let event = await app.inspectExistingEvent(folder: folder) else { return }
+        guard destination == .existingEvent else { return }
         currentFolder = event.eventFolder
         eventName = event.eventName
         if let date = DateFormatter.eventDate.date(from: event.eventDate) {
             eventDate = date
         }
-        usingExistingEvent = true
         app.notice = "Existing event selected. Its metadata will be kept."
     }
 

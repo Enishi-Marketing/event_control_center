@@ -25,6 +25,7 @@ enum AppSection: String, CaseIterable, Identifiable {
 enum ImportDestination: String, CaseIterable, Identifiable, Codable {
     case googleDrive = "Google Drive"
     case local = "Local Events Folder"
+    case existingEvent = "Existing event"
 
     var id: String { rawValue }
 }

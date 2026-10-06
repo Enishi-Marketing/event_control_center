@@ -103,9 +103,10 @@ level to JPGs that already exist; a progress bar shows the current image and
 the number completed. New installations start at **Auto + 50**; staff can
 adjust the slider and their choice is saved on that Mac.
 
-To add missing media to an event already on the shared drive, choose **Choose
-existing event folder** on the Import page, then **Choose media folder** for
-the original files. The existing event metadata is kept, and manually chosen
+To add missing media to an event already on the shared drive, select
+**Destination → Existing event** on the Import page and choose the event folder.
+Then choose **Choose media folder** for the original files. The existing event
+metadata is kept, and manually chosen
 source folders are never offered for deletion or ejection. Detected writable
 removable cards still offer optional cleanup after import. The app sends a
 macOS notification when an import finishes; macOS may ask for notification
