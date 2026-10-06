@@ -880,6 +880,45 @@ class HeroLibraryService:
         return digest.hexdigest()
 
     @staticmethod
+    def _photo_digest(path: Path) -> str:
+        """Compare selected photos independently of embedded metadata."""
+        with Image.open(path) as image:
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            digest = hashlib.sha256(str(image.size).encode("ascii"))
+            digest.update(image.tobytes())
+            return digest.hexdigest()
+
+    def _existing_published_pair(self, asset: dict, source: Path) -> tuple[Path, Path] | None:
+        """Check matching published names before treating a collision as a new photo.
+
+        Only candidates for this selected event/photo number are opened. Discovery
+        continues to read metadata only, and renamed or moved library photos can
+        be recovered even when the local catalog or shared manifest was reset.
+        """
+        root = AppConfig.HERO_PUBLISH_ROOT
+        stem = self._published_stem(asset)
+        candidates = sorted(
+            (path for path in (root / "MASTER").rglob("*")
+             if path.suffix.lower() in PUBLISHABLE_SUFFIXES
+             and (path.stem == stem or re.fullmatch(re.escape(stem) + r" - EIS-H\d{6}", path.stem))),
+            key=lambda path: (path.stem != stem, str(path)),
+        )
+        source_digest = None
+        for master in candidates:
+            if source_digest is None:
+                source_digest = self._photo_digest(source)
+            if self._photo_digest(master) != source_digest:
+                continue
+            web = root / "WEB" / master.relative_to(root / "MASTER").with_suffix(".jpg")
+            if not web.is_file():
+                alternatives = list((root / "WEB").rglob(master.stem + ".jpg"))
+                if len(alternatives) != 1:
+                    raise ValueError("This photo already has a MASTER on Drive, but its WEB copy is missing or ambiguous. Review the existing files before retrying.")
+                web = alternatives[0]
+            return master, web
+        return None
+
+    @staticmethod
     def _xmp(asset: dict) -> bytes:
         root = ET.Element("x:xmpmeta", {"xmlns:x": "adobe:ns:meta/"})
         rdf = ET.SubElement(root, "rdf:RDF", {"xmlns:rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#"})
@@ -1088,6 +1127,8 @@ class HeroLibraryService:
         with closing(self._connect()) as db, db:
             self._assign_event_photo_numbers(db)
             for asset_id in asset_ids:
+                if not db.in_transaction:
+                    db.execute("BEGIN IMMEDIATE")
                 row = db.execute("SELECT * FROM assets WHERE asset_id=?", (asset_id,)).fetchone()
                 if row is None or row["removed_at"] or row["matched_library_path"] or row["edit_state"] not in {"APPROVED_AS_IS", "READY_TO_PUBLISH"}:
                     raise ValueError(f"{asset_id} is not ready to publish.")
@@ -1103,19 +1144,27 @@ class HeroLibraryService:
                 asset["browse_group"] = browse_group
                 browse_path = self._browse_path(asset)
                 master_dir, web_dir = root / "MASTER" / browse_path, root / "WEB" / browse_path
-                master_dir.mkdir(parents=True, exist_ok=True)
-                web_dir.mkdir(parents=True, exist_ok=True)
+                existing_pair = self._existing_published_pair(asset, source)
                 stem = self._published_stem(asset)
                 master = master_dir / f"{stem}{source.suffix.lower()}"
                 web = web_dir / f"{stem}.jpg"
-                if master.exists() or web.exists():
+                if existing_pair:
+                    master, web = existing_pair
+                    owner = db.execute("SELECT asset_id FROM assets WHERE master_path=? AND edit_state='PUBLISHED' AND removed_at IS NULL AND asset_id != ?",
+                                       (str(master), asset_id)).fetchone()
+                    if owner:
+                        raise ValueError(f"{asset_id} duplicates published asset {owner['asset_id']}.")
+                elif master.exists() or web.exists():
                     stem = f"{stem} - {asset_id}"
                     master = master_dir / f"{stem}{source.suffix.lower()}"
                     web = web_dir / f"{stem}.jpg"
                     if master.exists() or web.exists():
                         raise ValueError(f"Published file already exists for {asset_id}; review it before retrying.")
                 try:
-                    shutil.copy2(source, master)
+                    if not existing_pair:
+                        master.parent.mkdir(parents=True, exist_ok=True)
+                        web.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(source, master)
                     with Image.open(source) as image:
                         exif = image.getexif()
                         capture_date = exif.get(36867) or exif.get(306) or datetime.fromtimestamp(
@@ -1123,19 +1172,22 @@ class HeroLibraryService:
                         ).isoformat()
                         image = ImageOps.exif_transpose(image)
                         width, height = image.size
-                        image.thumbnail((2400, 2400), Image.Resampling.LANCZOS)
-                        image.convert("RGB").save(web, "JPEG", quality=82, optimize=True)
+                        if not existing_pair:
+                            image.thumbnail((2400, 2400), Image.Resampling.LANCZOS)
+                            image.convert("RGB").save(web, "JPEG", quality=82, optimize=True)
                     asset["sha256"] = digest
-                    self._embed_metadata(master, asset)
-                    self._embed_metadata(web, asset)
+                    if not existing_pair:
+                        self._embed_metadata(master, asset)
+                        self._embed_metadata(web, asset)
                     db.execute("""UPDATE assets SET edit_state='PUBLISHED', browse_group=?, sha256=?, capture_date=?, width=?, height=?,
                         orientation=?, master_path=?, web_path=?, published_at=?, updated_at=? WHERE asset_id=?""",
                         (browse_group, digest, str(capture_date), width, height, "Landscape" if width > height else "Portrait" if height > width else "Square",
                          str(master), str(web), _now(), _now(), asset_id))
                     db.commit()
                 except Exception:
-                    for path in (master, web):
-                        path.unlink(missing_ok=True)
+                    if not existing_pair:
+                        for path in (master, web):
+                            path.unlink(missing_ok=True)
                     raise
                 local_paths = [self._local_copy(asset)]
                 local_paths.extend(Path(asset[key]) if asset[key] else None

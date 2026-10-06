@@ -120,6 +120,57 @@ class HeroLibraryTests(unittest.TestCase):
         restored = self.service.restore([asset["asset_id"]])[0]
         self.assertTrue(Path(restored["master_path"]).is_file())
 
+    def _published_with_fresh_catalog(self):
+        with patch.object(HeroLibraryService, "_finder_tags", return_value=["Hero Shot"]):
+            asset = self.service.scan()["assets"][0]
+        published = self.service.push_originals([asset["asset_id"]])["assets"][0]
+        (self.publish_root / "Hero_Catalog.json").unlink()
+        fresh = HeroLibraryService(self.root / "fresh.sqlite3")
+        with patch.object(HeroLibraryService, "_finder_tags", return_value=["Hero Shot"]):
+            fresh_asset = fresh.scan()["assets"][0]
+        self.assertIsNone(fresh_asset["matched_library_path"])
+        return published, fresh, fresh_asset
+
+    def test_publish_reuses_existing_photo_after_catalog_and_manifest_loss(self):
+        published, fresh, asset = self._published_with_fresh_catalog()
+        master, web = Path(published["master_path"]), Path(published["web_path"])
+        original_bytes = master.read_bytes(), web.read_bytes()
+        self.assertNotEqual(self.service._hash(master), self.service._hash(self.photo))
+        result = fresh.push_originals([asset["asset_id"]])
+        self.assertEqual(result["pushed"], 1, result["errors"])
+        self.assertEqual(result["assets"][0]["master_path"], str(master))
+        self.assertEqual((master.read_bytes(), web.read_bytes()), original_bytes)
+        self.assertEqual(len(list(self.publish_root.rglob("*.jpg"))), 2)
+        self.assertEqual(json.loads((self.publish_root / "Hero_Catalog.json").read_text())["assets"][0]["master"], str(master.relative_to(self.publish_root)))
+
+    def test_publish_recovers_pair_moved_into_different_school_section(self):
+        published, fresh, asset = self._published_with_fresh_catalog()
+        master, web = Path(published["master_path"]), Path(published["web_path"])
+        moved = self.publish_root / "MASTER/Students/Primary School" / master.name
+        moved.parent.mkdir(parents=True)
+        master.rename(moved)
+        result = fresh.push_originals([asset["asset_id"]])
+        self.assertEqual(result["pushed"], 1, result["errors"])
+        self.assertEqual(result["assets"][0]["master_path"], str(moved))
+        self.assertEqual(result["assets"][0]["web_path"], str(web))
+        self.assertEqual(len(list(self.publish_root.rglob("*.jpg"))), 2)
+
+    def test_publish_refuses_duplicate_when_existing_web_copy_is_missing(self):
+        published, fresh, asset = self._published_with_fresh_catalog()
+        Path(published["web_path"]).unlink()
+        result = fresh.push_originals([asset["asset_id"]])
+        self.assertEqual(result["pushed"], 0)
+        self.assertIn("WEB copy is missing", result["errors"][0])
+        self.assertEqual(len(list(self.publish_root.rglob("*.jpg"))), 1)
+
+    def test_publish_keeps_different_photos_with_same_event_filename(self):
+        published, fresh, asset = self._published_with_fresh_catalog()
+        Image.new("RGB", (120, 80), "red").save(self.photo)
+        result = fresh.push_originals([asset["asset_id"]])
+        self.assertEqual(result["pushed"], 1, result["errors"])
+        self.assertNotEqual(result["assets"][0]["master_path"], published["master_path"])
+        self.assertEqual(len(list(self.publish_root.rglob("*.jpg"))), 4)
+
     def test_finder_tag_plist_is_read_without_photo_bytes(self):
         plist = plistlib.dumps(["Hero Shot\n6", "Review\n2"])
         subprocess.run(["xattr", "-wx", "com.apple.metadata:_kMDItemUserTags", plist.hex(), str(self.photo)], check=True)

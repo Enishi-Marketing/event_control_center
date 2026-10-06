@@ -47,6 +47,11 @@ possible when some photos have not been published. Lightroom working files keep
 their ECC Asset ID prefix so exports can still be matched. The Library tab has
 **Update existing filenames** for previously published copies; it updates the
 catalog and keeps a local rename journal. Original event photos are not renamed.
+Publishing checks existing copies with the same event/photo name before adding
+an Asset ID suffix. If the image pixels match, ECC reconnects to the existing
+MASTER and WEB files even when metadata or their school-section folder changed.
+This recovery reads only matching candidates for the selected photo; scanning
+the source archive remains metadata-only.
 The shared library puts `MASTER` and `WEB` at the top level. Each contains
 `Students`, `Teachers & Staff`, `Campus`, and `Community`. `Students` has
 `Early Years`, `Primary School`, `Middle School`, and `High School` folders; mixed or
