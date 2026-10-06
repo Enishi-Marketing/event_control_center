@@ -17,10 +17,12 @@ struct BackendClient {
     private let rootURL: URL
     private let executableURL: URL
     private let arguments: [String]
+    private let environmentOverrides: [String: String]
 
     init() throws {
         let environment = ProcessInfo.processInfo.environment
         let fileManager = FileManager.default
+        environmentOverrides = Self.bundleEnvironment()
         if let bundledBackend = Bundle.main.resourceURL?
             .appendingPathComponent("backend/EventControlBackend"),
            fileManager.isExecutableFile(atPath: bundledBackend.path) {
@@ -64,6 +66,7 @@ struct BackendClient {
             process.executableURL = executableURL
             process.arguments = arguments
             process.currentDirectoryURL = rootURL
+            process.environment = ProcessInfo.processInfo.environment.merging(environmentOverrides) { _, value in value }
 
             let input = Pipe()
             let output = Pipe()
@@ -126,6 +129,7 @@ struct BackendClient {
                 process.executableURL = executableURL
                 process.arguments = arguments
                 process.currentDirectoryURL = rootURL
+                process.environment = ProcessInfo.processInfo.environment.merging(environmentOverrides) { _, value in value }
 
                 let input = Pipe()
                 let output = Pipe()
@@ -166,6 +170,16 @@ struct BackendClient {
     private struct Request<Payload: Encodable>: Encodable {
         let command: String
         let payload: Payload
+    }
+
+    private static func bundleEnvironment() -> [String: String] {
+        guard let url = Bundle.main.resourceURL?.appendingPathComponent("backend/environment.json"),
+              let data = try? Data(contentsOf: url),
+              let values = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return [:]
+        }
+        let allowed = Set(["ECC_LOCAL_SETTINGS_PATH", "HERO_CATALOG_PATH"])
+        return values.filter { allowed.contains($0.key) }
     }
 
     private static func findCompatiblePython(

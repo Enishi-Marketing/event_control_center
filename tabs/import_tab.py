@@ -17,8 +17,10 @@ from services.importer import (
     MediaScanResult,
     MediaSession,
 )
+from services.keyword_service import KeywordVocabulary, keyword_key
 from services.metadata_service import MetadataService
 from services.project_service import ProjectCreationSummary, ProjectService
+from services.search_service import MetadataSearchService
 from services.source_cleanup_service import SourceCleanupResult, SourceCleanupService
 from services.unedited_jpg_service import (
     UneditedJpgProgress,
@@ -28,26 +30,41 @@ from services.unedited_jpg_service import (
 
 
 class KeywordPillInput(ttk.Frame):
-    """Comma-friendly keyword input that renders normalized keywords as pills."""
+    """Reusable free-form keyword pills with event vocabulary suggestions."""
 
     def __init__(
         self,
         master: tk.Widget,
-        normalizer: Callable[[object], list[str]],
+        vocabulary: KeywordVocabulary | None = None,
     ) -> None:
         super().__init__(master)
-        self.normalizer = normalizer
+        self.vocabulary = vocabulary or KeywordVocabulary()
         self.keywords: list[str] = []
         self.pending_var = tk.StringVar()
+        self.matches: list[str] = []
 
         self.columnconfigure(1, weight=1)
         self.pills_frame = ttk.Frame(self)
         self.pills_frame.grid(row=0, column=0, sticky="w")
         self.entry = ttk.Entry(self, textvariable=self.pending_var)
         self.entry.grid(row=0, column=1, sticky="ew")
-        self.entry.bind("<KeyRelease>", self._keywords_typed)
-        self.entry.bind("<Return>", self._commit_all)
-        self.entry.bind("<FocusOut>", self._commit_all)
+        self.entry.bind("<Return>", self._return_pressed)
+        self.entry.bind("<Down>", self._move_selection)
+        self.entry.bind("<Up>", self._move_selection)
+        self.entry.bind("<Escape>", self._close_suggestions)
+        self.entry.bind("<BackSpace>", self._backspace)
+        self.entry.bind("<FocusOut>", self._focus_out)
+        self.pending_var.trace_add("write", self._keywords_typed)
+        self.suggestion_list = tk.Listbox(self, height=6, exportselection=False)
+        self.suggestion_list.grid(row=1, column=1, sticky="ew")
+        self.suggestion_list.grid_remove()
+        self.suggestion_list.bind("<ButtonRelease-1>", self._select_suggestion)
+
+    def set_vocabulary(self, vocabulary: KeywordVocabulary) -> None:
+        self.vocabulary = vocabulary
+        self.keywords = vocabulary.canonicalize(self.keywords)
+        self._render_pills()
+        self._show_suggestions()
 
     def get_text(self) -> str:
         return ", ".join(self.get_keywords())
@@ -56,13 +73,74 @@ class KeywordPillInput(ttk.Frame):
         self._commit_pending(keep_tail=False)
         return list(self.keywords)
 
-    def _keywords_typed(self, _event: tk.Event) -> None:
+    def _keywords_typed(self, *_args: object) -> None:
         if "," in self.pending_var.get():
             self._commit_pending(keep_tail=True)
+        self._show_suggestions()
 
-    def _commit_all(self, _event: tk.Event | None = None) -> str:
-        self._commit_pending(keep_tail=False)
+    def _show_suggestions(self) -> None:
+        query = self.pending_var.get().strip()
+        self.suggestion_list.delete(0, tk.END)
+        if not query:
+            self.suggestion_list.grid_remove()
+            return
+        self.matches = [entry.display_value for entry in self.vocabulary.suggest(query, self.keywords)]
+        for display in self.matches:
+            self.suggestion_list.insert(tk.END, display)
+        if keyword_key(query) not in self.vocabulary.by_key:
+            self.suggestion_list.insert(tk.END, f'Add "{query}" as new keyword')
+        if self.suggestion_list.size():
+            self.suggestion_list.configure(height=min(self.suggestion_list.size(), 7))
+            self.suggestion_list.grid()
+        else:
+            self.suggestion_list.grid_remove()
+
+    def _move_selection(self, event: tk.Event) -> str:
+        if not self.suggestion_list.winfo_ismapped():
+            self._show_suggestions()
+        count = self.suggestion_list.size()
+        if count:
+            current = self.suggestion_list.curselection()
+            step = 1 if event.keysym == "Down" else -1
+            selected = min(max((current[0] if current else -1) + step, 0), count - 1)
+            self.suggestion_list.selection_clear(0, tk.END)
+            self.suggestion_list.selection_set(selected)
         return "break"
+
+    def _return_pressed(self, _event: tk.Event) -> str:
+        selected = self.suggestion_list.curselection() if self.suggestion_list.winfo_ismapped() else ()
+        if selected and selected[0] < len(self.matches):
+            self._add_keyword(self.matches[selected[0]])
+        elif not selected and self.suggestion_list.winfo_ismapped() and self.matches:
+            self._add_keyword(self.matches[0])
+        else:
+            self._commit_pending(keep_tail=False)
+        return "break"
+
+    def _select_suggestion(self, _event: tk.Event) -> None:
+        selected = self.suggestion_list.curselection()
+        if selected:
+            self._add_keyword(self.matches[selected[0]] if selected[0] < len(self.matches) else self.pending_var.get())
+            self.entry.focus_set()
+
+    def _close_suggestions(self, _event: tk.Event) -> str:
+        self.suggestion_list.grid_remove()
+        return "break"
+
+    def _backspace(self, _event: tk.Event) -> str | None:
+        if not self.pending_var.get() and self.keywords:
+            self.keywords.pop()
+            self._render_pills()
+            return "break"
+        return None
+
+    def _focus_out(self, _event: tk.Event) -> None:
+        self.after(100, self._commit_if_unfocused)
+
+    def _commit_if_unfocused(self) -> None:
+        if self.focus_get() not in {self.entry, self.suggestion_list}:
+            self._commit_pending(keep_tail=False)
+            self.suggestion_list.grid_remove()
 
     def _commit_pending(self, keep_tail: bool) -> None:
         pending = self.pending_var.get()
@@ -74,11 +152,17 @@ class KeywordPillInput(ttk.Frame):
             values_to_commit = [pending]
             tail = ""
 
-        normalized = self.normalizer([*self.keywords, *values_to_commit])
+        normalized = self.vocabulary.canonicalize([*self.keywords, *values_to_commit])
         if normalized != self.keywords:
             self.keywords = normalized
             self._render_pills()
         self.pending_var.set(tail.lstrip())
+
+    def _add_keyword(self, keyword: str) -> None:
+        self.keywords = self.vocabulary.canonicalize([*self.keywords, keyword])
+        self._render_pills()
+        self.pending_var.set("")
+        self.suggestion_list.grid_remove()
 
     def _render_pills(self) -> None:
         for child in self.pills_frame.winfo_children():
@@ -145,6 +229,7 @@ class ImportTab(ttk.Frame):
         self.scan_result: MediaScanResult | None = None
         self.current_event: EventFolderResult | None = None
         self.worker_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+        self._keyword_load_sequence = 0
         self.cancel_event: threading.Event | None = None
         self.worker_thread: threading.Thread | None = None
         self.thumbnail_images: list[tk.PhotoImage] = []
@@ -174,6 +259,28 @@ class ImportTab(ttk.Frame):
         self._build_layout()
         self._load_sources()
         self.after(100, self._poll_worker_queue)
+        self._load_keyword_vocabulary()
+
+    def _load_keyword_vocabulary(self) -> None:
+        self._keyword_load_sequence += 1
+        sequence = self._keyword_load_sequence
+        roots = {"Local Events": AppConfig.ARCHIVE_SOURCE_ROOT}
+        if AppConfig.SHARED_DRIVE_CONFIGURED:
+            roots["Google Drive"] = AppConfig.ARCHIVE_DRIVE_ROOT
+        threading.Thread(
+            target=self._keyword_vocabulary_worker, args=(roots, sequence), daemon=True
+        ).start()
+
+    def _keyword_vocabulary_worker(self, roots: dict[str, Path], sequence: int) -> None:
+        try:
+            self.worker_queue.put(("keyword_vocabulary", (sequence, self._build_keyword_vocabulary(roots))))
+        except Exception:
+            pass  # Free-form entry remains available if a root cannot be scanned.
+
+    @staticmethod
+    def _build_keyword_vocabulary(roots: dict[str, Path]) -> KeywordVocabulary:
+        index = MetadataSearchService().build_index(roots)
+        return KeywordVocabulary.from_events(index.records)
 
     def _build_layout(self) -> None:
         self.rowconfigure(0, weight=1)
@@ -240,7 +347,6 @@ class ImportTab(ttk.Frame):
         ttk.Label(details_frame, text="Keywords").grid(row=4, column=0, sticky="w")
         self.keyword_input = KeywordPillInput(
             details_frame,
-            normalizer=self.metadata_service.normalize_keywords,
         )
         self.keyword_input.grid(
             row=4, column=1, sticky="ew", padx=(12, 0), pady=(0, 10)
@@ -428,6 +534,10 @@ class ImportTab(ttk.Frame):
         folder_result = self.folder_service.create_event_folders(event_date, event_name)
 
         self._set_status("Writing metadata...")
+        roots = {"Local Events": AppConfig.ARCHIVE_SOURCE_ROOT}
+        if AppConfig.SHARED_DRIVE_CONFIGURED:
+            roots["Google Drive"] = AppConfig.ARCHIVE_DRIVE_ROOT
+        self.keyword_input.set_vocabulary(self._build_keyword_vocabulary(roots))
         metadata = self.metadata_service.create_metadata(
             event_name=event_name,
             event_date=event_date,
@@ -435,8 +545,10 @@ class ImportTab(ttk.Frame):
             description=self.description_text.get("1.0", "end").strip(),
             keywords_text=self.keyword_input.get_text(),
             grades=self._selected_grades(),
+            keyword_vocabulary=self.keyword_input.vocabulary,
         )
         self.metadata_service.write_metadata(folder_result.metadata_path, metadata)
+        self._load_keyword_vocabulary()
 
         self.current_event = folder_result
         self.event_folder_var.set(f"Event folder: {folder_result.event_folder}")
@@ -456,6 +568,7 @@ class ImportTab(ttk.Frame):
         self.destination_roots = self._destination_roots()
         self.school_year_var.set(AppConfig.DEFAULT_SCHOOL_YEAR)
         self._event_identity_changed()
+        self._load_keyword_vocabulary()
 
     def _destination_roots(self) -> dict[str, Path]:
         return {
@@ -758,7 +871,11 @@ class ImportTab(ttk.Frame):
             self.after(100, self._poll_worker_queue)
 
     def _handle_worker_message(self, message: str, payload: object) -> None:
-        if message == "scan_success" and isinstance(payload, MediaScanResult):
+        if message == "keyword_vocabulary" and isinstance(payload, tuple):
+            sequence, vocabulary = payload
+            if sequence == self._keyword_load_sequence:
+                self.keyword_input.set_vocabulary(vocabulary)
+        elif message == "scan_success" and isinstance(payload, MediaScanResult):
             self._set_busy(False)
             self._set_progress_active(False)
             self._show_scan_result(payload)

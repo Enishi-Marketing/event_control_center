@@ -5,6 +5,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     case search = "Search"
     case utilities = "Utilities"
     case metadata = "Metadata"
+    case heroLibrary = "Hero Library"
     case settings = "Settings"
 
     var id: String { rawValue }
@@ -15,6 +16,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .search: "magnifyingglass"
         case .utilities: "wand.and.stars"
         case .metadata: "doc.text"
+        case .heroLibrary: "photo.stack"
         case .settings: "gearshape"
         }
     }
@@ -45,6 +47,108 @@ struct ConfigSnapshot: Codable {
     let googleSheetsWorksheetName: String
     let lightroomTemplateDir: String
     let premiereTemplate: String
+    let heroSourceRoots: [String]
+    let heroWorkspaceRoot: String
+    let heroPublishRoot: String
+}
+
+struct HeroAsset: Codable, Identifiable {
+    let assetId: String
+    let sourcePath: String
+    let originalFilename: String
+    let sourceSize: Int?
+    let eventPhotoNumber: Int?
+    let eventFolder: String?
+    let eventName: String?
+    let eventDate: String?
+    let schoolYear: String?
+    let eventId: String
+    let eventDescription: String
+    let eventGrades: [String]
+    let eventSections: [String]
+    let eventKeywords: [String]
+    let grades: [String]
+    let sections: [String]
+    let category: String
+    let browseGroup: String
+    let subject: String
+    let setting: String
+    let extraKeywords: [String]
+    let featured: Bool
+    let editState: String
+    let exportPath: String?
+    let sha256: String?
+    let masterPath: String?
+    let webPath: String?
+    let needsEditPath: String?
+    let thumbnailPath: String?
+    let matchedLibraryPath: String?
+    let removedAt: String?
+    let discoveredAt: String
+
+    var id: String { assetId }
+}
+
+struct HeroAssetsResponse: Codable { let assets: [HeroAsset] }
+struct HeroUpdateResponse: Codable {
+    let assets: [HeroAsset]
+    let organized: Int
+    let metadataEmbedded: Int
+    let errors: [String]
+}
+struct HeroScanResponse: Codable {
+    let found: Int
+    let added: Int
+    let errors: [String]
+    let assets: [HeroAsset]
+}
+struct HeroRefreshResponse: Codable {
+    let found: Int
+    let added: Int
+    let synced: Int
+    let skipped: Int
+    let pending: Int
+    let errors: [String]
+    let assets: [HeroAsset]
+}
+struct HeroWorkspaceResponse: Codable {
+    let catalogPath: String
+    let queuePath: String
+    let incomingPath: String
+    let workingPath: String
+    let exportPath: String
+}
+struct HeroMatchResponse: Codable { let matched: Int; let assets: [HeroAsset] }
+struct HeroPushResponse: Codable { let pushed: Int; let errors: [String]; let assets: [HeroAsset] }
+struct HeroRenameResponse: Codable { let renamed: Int; let errors: [String]; let assets: [HeroAsset] }
+struct HeroReorganizeResponse: Codable { let moved: Int; let errors: [String]; let assets: [HeroAsset] }
+struct HeroDriveAuditResponse: Codable { let uncatalogued: [String]; let count: Int }
+struct HeroDriveAdoptResponse: Codable { let added: [String]; let assets: [HeroAsset] }
+struct HeroIDsPayload: Codable { let assetIds: [String] }
+struct HeroChangesPayload: Codable { let assetIds: [String]; let changes: [String: HeroValue] }
+enum HeroValue: Codable {
+    case text(String), texts([String]), flag(Bool)
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .text(let value): try container.encode(value)
+        case .texts(let values): try container.encode(values)
+        case .flag(let value): try container.encode(value)
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(String.self) { self = .text(value) }
+        else if let values = try? container.decode([String].self) { self = .texts(values) }
+        else { self = .flag(try container.decode(Bool.self)) }
+    }
+}
+struct HeroSettingsPayload: Codable {
+    let sourceRoots: [String]
+    let workspaceRoot: String
+    let publishRoot: String
 }
 
 struct CreateEventPayload: Codable {
@@ -61,6 +165,19 @@ struct CreateEventPayload: Codable {
 struct CreatedEvent: Codable {
     let eventFolder: String
     let alreadyExisted: Bool
+}
+
+struct KeywordSuggestion: Codable, Identifiable {
+    let normalizedValue: String
+    let displayValue: String
+    let usageCount: Int
+    let lastUsed: String
+
+    var id: String { normalizedValue }
+}
+
+struct KeywordVocabularyResponse: Codable {
+    let entries: [KeywordSuggestion]
 }
 
 struct ExistingEventInfo: Codable {

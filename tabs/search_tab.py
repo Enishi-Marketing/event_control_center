@@ -8,6 +8,7 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 from config.config import AppConfig
+from services.keyword_service import keyword_key
 from services.search_service import (
     MetadataSearchIndex,
     MetadataSearchRecord,
@@ -305,7 +306,9 @@ class SearchTab(ttk.Frame):
                 continue
             if grade != "Any grade" and grade not in record.grades:
                 continue
-            if keyword != "Any keyword" and keyword not in record.keywords:
+            if keyword != "Any keyword" and not any(
+                keyword_key(value) == keyword_key(keyword) for value in record.keywords
+            ):
                 continue
             records.append(record)
 

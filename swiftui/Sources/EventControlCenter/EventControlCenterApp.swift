@@ -36,6 +36,7 @@ final class EventControlCenterDelegate: NSObject, NSApplicationDelegate, UNUserN
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         if Bundle.main.bundleURL.pathExtension == "app",
+           Bundle.main.bundleIdentifier != "jp.ac.enishi.event-control-center.hero-test",
            Bundle.main.bundleIdentifier != nil {
             UNUserNotificationCenter.current().delegate = self
             let controller = SPUStandardUpdaterController(
@@ -101,6 +102,16 @@ final class AppState: ObservableObject {
             result = try await self.request("create_event", payload: payload)
         }
         return result
+    }
+
+    func keywordVocabulary() async -> [KeywordSuggestion] {
+        do {
+            let result: KeywordVocabularyResponse = try await request("keyword_vocabulary", payload: EmptyPayload())
+            return result.entries
+        } catch {
+            errorMessage = error.localizedDescription
+            return []
+        }
     }
 
     func inspectExistingEvent(folder: String) async -> ExistingEventInfo? {
@@ -244,6 +255,144 @@ final class AppState: ObservableObject {
             let config: ConfigSnapshot = try await self.request("save_settings", payload: payload)
             self.configuration = config
             self.notice = "Settings saved. New events will use the updated locations."
+        }
+    }
+
+    func heroList() async -> [HeroAsset]? {
+        var result: HeroAssetsResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_list", payload: EmptyPayload())
+        }
+        return result?.assets
+    }
+
+    func heroScan() async -> HeroScanResponse? {
+        var result: HeroScanResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_scan", payload: EmptyPayload())
+        }
+        return result
+    }
+
+    func heroRefresh(limit: Int? = nil) async -> HeroRefreshResponse? {
+        struct Payload: Codable { let limit: Int? }
+        var result: HeroRefreshResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_refresh", payload: Payload(limit: limit))
+        }
+        return result
+    }
+
+    func heroWorkspace() async -> HeroWorkspaceResponse? {
+        var result: HeroWorkspaceResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_workspace", payload: EmptyPayload())
+        }
+        return result
+    }
+
+    func heroRemove(ids: [String]) async -> [HeroAsset]? {
+        var result: HeroAssetsResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_remove", payload: HeroIDsPayload(assetIds: ids))
+        }
+        return result?.assets
+    }
+
+    func heroRestore(ids: [String]) async -> [HeroAsset]? {
+        var result: HeroAssetsResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_restore", payload: HeroIDsPayload(assetIds: ids))
+        }
+        return result?.assets
+    }
+
+    func heroUpdate(ids: [String], changes: [String: HeroValue]) async -> HeroUpdateResponse? {
+        var result: HeroUpdateResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_update", payload: HeroChangesPayload(assetIds: ids, changes: changes))
+        }
+        return result
+    }
+
+    func heroStage(ids: [String]) async -> [HeroAsset]? {
+        var result: HeroAssetsResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_stage", payload: HeroIDsPayload(assetIds: ids))
+        }
+        return result?.assets
+    }
+
+    func heroMatchExports() async -> HeroMatchResponse? {
+        var result: HeroMatchResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_match_exports", payload: EmptyPayload())
+        }
+        return result
+    }
+
+    func heroPublish(ids: [String]) async -> [HeroAsset]? {
+        var result: HeroAssetsResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_publish", payload: HeroIDsPayload(assetIds: ids))
+        }
+        return result?.assets
+    }
+
+    func heroPushBatch(ids: [String]) async -> HeroPushResponse? {
+        var result: HeroPushResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_push_batch", payload: HeroIDsPayload(assetIds: ids))
+        }
+        return result
+    }
+
+    func heroPushOriginals(ids: [String]) async -> HeroPushResponse? {
+        var result: HeroPushResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_push_originals", payload: HeroIDsPayload(assetIds: ids))
+        }
+        return result
+    }
+
+    func heroRenamePublished() async -> HeroRenameResponse? {
+        var result: HeroRenameResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_rename_published", payload: EmptyPayload())
+        }
+        return result
+    }
+
+    func heroReorganize() async -> HeroReorganizeResponse? {
+        var result: HeroReorganizeResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_reorganize", payload: EmptyPayload())
+        }
+        return result
+    }
+
+    func heroAuditDrive() async -> HeroDriveAuditResponse? {
+        var result: HeroDriveAuditResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_audit_drive", payload: EmptyPayload())
+        }
+        return result
+    }
+
+    func heroAdoptDrive(path: String) async -> HeroDriveAdoptResponse? {
+        struct Payload: Codable { let paths: [String] }
+        var result: HeroDriveAdoptResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_adopt_drive", payload: Payload(paths: [path]))
+        }
+        return result
+    }
+
+    func heroSaveSettings(_ payload: HeroSettingsPayload) async {
+        await perform(showSuccess: false) {
+            let config: ConfigSnapshot = try await self.request("hero_save_settings", payload: payload)
+            self.configuration = config
+            self.notice = "Hero Library locations saved."
         }
     }
 

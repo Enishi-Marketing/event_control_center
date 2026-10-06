@@ -21,6 +21,7 @@ struct ContentView: View {
                 case .search: SearchView()
                 case .utilities: UtilitiesView()
                 case .metadata: MetadataView()
+                case .heroLibrary: HeroLibraryView()
                 case .settings: SettingsView()
                 }
             }
@@ -88,6 +89,8 @@ struct ImportView: View {
     @State private var schoolYear = ""
     @State private var description = ""
     @State private var keywords: [String] = []
+    @State private var keywordDraft = ""
+    @State private var keywordSuggestions: [KeywordSuggestion] = []
     @State private var selectedGrades: Set<String> = []
     @State private var currentFolder: String?
     @State private var usingExistingEvent = false
@@ -160,6 +163,10 @@ struct ImportView: View {
             applyDefaultSchoolYear()
             await monitorRemovableMedia()
         }
+        .task { await refreshKeywordVocabulary() }
+        .onChange(of: app.configuration?.multimediaEventsRoot) { _, _ in
+            Task { await refreshKeywordVocabulary() }
+        }
         .onChange(of: sourcePath) { _, path in
             if !path.isEmpty && !isCleaningUpSource {
                 clearCardSafetyStatus()
@@ -215,7 +222,7 @@ struct ImportView: View {
                     }.pickerStyle(.menu).frame(width: 245)
                 }
                 TextField("School year", text: $schoolYear).textFieldStyle(.roundedBorder)
-                TagEditor(tags: $keywords)
+                TagEditor(tags: $keywords, draft: $keywordDraft, suggestions: keywordSuggestions)
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Description")
                         .font(.subheadline.weight(.medium))
@@ -372,12 +379,20 @@ struct ImportView: View {
 
     private func createEvent() async {
         let date = DateFormatter.eventDate.string(from: eventDate)
-        let payload = CreateEventPayload(eventName: eventName, eventDate: date, destination: destination.rawValue, schoolYear: schoolYear, description: description, keywords: keywords, grades: selectedGrades.sorted(), allowOverwrite: replaceExisting)
+        let finalKeywords = KeywordTags.canonicalized(keywords + [keywordDraft], using: keywordSuggestions)
+        let payload = CreateEventPayload(eventName: eventName, eventDate: date, destination: destination.rawValue, schoolYear: schoolYear, description: description, keywords: finalKeywords, grades: selectedGrades.sorted(), allowOverwrite: replaceExisting)
         if let result = await app.createEvent(payload) {
+            keywords = finalKeywords
+            keywordDraft = ""
+            await refreshKeywordVocabulary()
             currentFolder = result.eventFolder
             usingExistingEvent = false
             app.notice = result.alreadyExisted ? "Event metadata was updated." : "Event created and ready for media."
         }
+    }
+
+    private func refreshKeywordVocabulary() async {
+        keywordSuggestions = await app.keywordVocabulary()
     }
 
     private func openFolderPicker(_ purpose: FolderPurpose) {
@@ -801,37 +816,6 @@ private struct ThumbnailPreview: View {
     }
 }
 
-struct TagEditor: View {
-    @Binding var tags: [String]
-    @State private var draft = ""
-
-    var body: some View {
-        HStack(spacing: 6) {
-            ForEach(tags, id: \.self) { tag in
-                Button {
-                    tags.removeAll { $0 == tag }
-                } label: {
-                    Label(tag, systemImage: "xmark")
-                        .font(.caption)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 5)
-                        .background(.cyan.opacity(0.18), in: Capsule())
-                }
-                .buttonStyle(.plain)
-                .help("Remove keyword \(tag)")
-                .accessibilityLabel("Remove keyword \(tag)")
-            }
-            TextField("Add keywords", text: $draft).textFieldStyle(.roundedBorder).onSubmit(addTags)
-        }.onChange(of: draft) { _, text in if text.contains(",") { addTags() } }
-    }
-
-    private func addTags() {
-        let additions = draft.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty }
-        tags = Array(Set(tags + additions)).sorted()
-        draft = ""
-    }
-}
-
 struct SearchView: View {
     @EnvironmentObject private var app: AppState
     @State private var index = SearchIndex(records: [], suggestions: [], schoolYears: [], grades: [], keywords: [], errors: [])
@@ -844,7 +828,7 @@ struct SearchView: View {
     private var filtered: [EventRecord] {
         index.records.filter { record in
             let matchesQuery = query.isEmpty || [record.displayName, record.date, record.description, record.grades.joined(separator: " "), record.keywords.joined(separator: " ")].joined(separator: " ").localizedCaseInsensitiveContains(query)
-            return matchesQuery && (grade == "All grades" || record.grades.contains(grade)) && (keyword == "All keywords" || record.keywords.contains(keyword))
+            return matchesQuery && (grade == "All grades" || record.grades.contains(grade)) && (keyword == "All keywords" || record.keywords.contains { KeywordTags.key($0) == KeywordTags.key(keyword) })
         }.sorted { $0.date > $1.date }
     }
 

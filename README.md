@@ -2,6 +2,62 @@
 
 Desktop application for an international school multimedia workflow.
 
+## Hero Library
+
+The native app has a **Hero Library** sidebar page. In Finder, tag chosen photos
+`Hero Shot` in the configured event photo roots (including all subfolders).
+Opening Hero Library or choosing **Scan Hero Shot tags** reads directory entries
+and Finder tag metadata without opening image bytes. **Stage next batch** copies
+three, five, or ten selected tagged originals per click into the **local**
+`ECC Media Workspace/Needs Edit/Queued` folder. ECC makes
+small local thumbnails for review as each batch completes. The original archive remains untouched.
+An exact filename and file-size match already in `Hero_Shot_Library` or the
+older `Photo_Library` is skipped; no whole-archive hashing is needed. The old
+`Photo_Library` is read only and its existing folders are left in place.
+
+ECC reads an event folder's `Data/metadata.json` when present and inherits its
+event ID, name, date, school year, description, grades or sections, and
+keywords. Older event folders without Data use their folder names for event
+name and date. Photo-specific metadata can be added in bulk. The catalog is
+stored locally, and **Remove from Library** moves ECC-managed copies into
+local or shared `_Removed` folders; **Restore to Library** reverses that action. Removing
+a Finder tag stops future refresh copies, while an existing catalog record
+remains until explicitly removed in ECC.
+
+Choose **Open Lightroom Catalog** to create and open a dedicated catalog from
+ECC's included blank template. In Lightroom Classic, set Auto Import to watch
+the empty `Needs Edit/Incoming` folder and move files into
+`Needs Edit/Working Lightroom Edits` while keeping original filenames.
+Then choose **Send to Lightroom** in ECC to move queued photos into Incoming.
+Export full-quality finished files to the separate `Needs Edit/Exports` folder
+with their ECC Asset ID at the
+start of the filename; **Check Lightroom exports** matches them. **Use original**
+marks an already acceptable non-raw photo ready without editing. **Push ready
+to Drive** creates full-resolution `MASTER` and optimized `WEB` files under
+shallow subject folders, records a hash
+for duplicate detection, writes searchable metadata where supported, and clears
+successfully pushed photos from the local Needs Edit workspace.
+For a finished JPEG, PNG, TIFF, or HEIC that needs no Lightroom work, select it
+and choose **Publish original (no edit)** to send it straight to the same
+MASTER/WEB structure while preserving the source archive photo.
+Published MASTER and WEB copies use matching names such as
+`Open Campus - 2026.09.25 - 001.jpg`. The number is a stable position in the
+catalogued Hero photo list for that event, ordered by camera filename; gaps are
+possible when some photos have not been published. Lightroom working files keep
+their ECC Asset ID prefix so exports can still be matched. The Library tab has
+**Update existing filenames** for previously published copies; it updates the
+catalog and keeps a local rename journal. Original event photos are not renamed.
+The shared library puts `MASTER` and `WEB` at the top level. Each contains
+`Students`, `Teachers & Staff`, `Campus`, and `Community`. `Students` has
+`Early Years`, `Primary School`, `Middle School`, and `High School` folders; mixed or
+unknown sections go to `Mixed Sections` or `Section To Review`. One physical
+folder is chosen per photo. Event names, dates, grades, activities, and other
+facets remain in ECC and portable metadata rather than creating event folders.
+**Refresh Drive folders** moves only ECC-catalogued published photos into this
+layout, including files published by the earlier event-folder version.
+The user can choose source, local Lightroom workspace, and shared Hero Shot Library
+folders from the Hero Library **Locations** panel.
+
 ## Run
 
 ### Install on a staff Mac
@@ -246,3 +302,41 @@ python3 main.py
 - Google Drive and Google Sheets synchronization
 - Archive search
 - AI-assisted tagging
+# Hero Library (native macOS app)
+
+The SwiftUI sidebar includes **Hero Library** with Inbox, Library, and Featured views.
+Configure source folders, a local Lightroom workspace, and the shared-drive
+`Hero Library` folder from **Hero Library → Locations**. Finder-tag photos with
+`Hero Shot`, then choose **Scan Hero Shot tags**. Discovery reads directory entries,
+file types, and Finder tag extended attributes; it does not read or hash photo
+contents. Event metadata comes from the closest ancestor `Data/metadata.json`.
+
+The local SQLite catalog lives at
+`~/Library/Application Support/Event Control Center/hero_library.sqlite3`.
+Asset IDs are assigned at discovery so a Lightroom export can be matched by
+starting its filename with that ID, for example `EIS-H000428 final.jpg`.
+**Send to Lightroom** copies only selected originals into `Lightroom Incoming`.
+Configure Lightroom Classic's watched folder to use that empty Incoming folder
+and its destination to use `Lightroom Working`. Export finished images to
+`Lightroom Exports`, keeping the Asset ID at the start of each filename, then
+choose **Check Lightroom exports**. JPEG, PNG, TIFF, and HEIC can be published;
+raw originals require an edited export. The export remains local until Publish.
+
+Publish hashes only the selected finished file, checks for an already published
+copy, and writes a full-resolution MASTER and a 2400-pixel WEB JPEG under
+`MASTER/<subject>/` and `WEB/<subject>/`; Students has one additional
+school-section folder. Original sources stay in the event archive.
+JPEG MASTER and WEB files contain XMP metadata inside the image. One generated
+`Hero_Catalog.json` at the Hero Shot Library root indexes every published asset,
+including metadata for non-JPEG MASTER files. ECC remains the editable source
+of truth. The **Review staff additions** action finds photos placed directly in
+Drive by comparing paths without opening or hashing their image data. **Add to ECC**
+registers a reviewed photo in the local inbox and assigns an Asset ID without
+downloading or moving it. It can then be staged in a controlled batch, sent to
+Lightroom, or published as-is. The staff-uploaded original remains at its Drive
+location as the source after publication; ECC creates organized MASTER and WEB
+copies. Existing per-image sidecars are moved to a local `Metadata Backups`
+folder when Drive folders are refreshed. Files are copied through
+the configured Google Drive filesystem location, so Drive synchronization is
+handled by Google Drive for desktop. `Collections` is reserved for a later
+release.

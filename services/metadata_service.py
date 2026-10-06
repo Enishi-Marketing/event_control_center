@@ -2,6 +2,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from services.keyword_service import KeywordVocabulary
+
 
 class MetadataService:
     """Builds event metadata dictionaries from UI input."""
@@ -12,8 +14,9 @@ class MetadataService:
         event_date: str,
         school_year: str,
         description: str,
-        keywords_text: str,
+        keywords_text: object,
         grades: list[str],
+        keyword_vocabulary: KeywordVocabulary | None = None,
     ) -> dict[str, object]:
         timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -23,7 +26,7 @@ class MetadataService:
             "date": event_date.strip(),
             "school_year": school_year.strip(),
             "grades": grades,
-            "keywords": self.normalize_keywords(keywords_text),
+            "keywords": (keyword_vocabulary or KeywordVocabulary()).canonicalize(keywords_text),
             "description": description.strip(),
             "photo_count": 0,
             "video_count": 0,

@@ -3,6 +3,7 @@ from datetime import date
 import os
 import re
 import sys
+import json
 
 
 def _unquote_path(value: str) -> str:
@@ -78,6 +79,8 @@ def _write_local_settings(settings_path: Path, updates: dict[str, str]) -> None:
 
 def _local_settings_path(app_name: str) -> Path:
     """Return a writable settings path for packaged apps."""
+    if override := os.environ.get("ECC_LOCAL_SETTINGS_PATH", "").strip():
+        return Path(override).expanduser()
     source_path = Path(__file__).resolve().parent.parent / "config" / "local_settings.conf"
     if not getattr(sys, "frozen", False):
         return source_path
@@ -159,6 +162,34 @@ class AppConfig:
         "GOOGLE_SHEETS_WORKSHEET_NAME",
         "Events",
     )
+    HERO_SOURCE_ROOTS = json.loads(os.environ.get("HERO_SOURCE_ROOTS", "null")) or [
+        str(LOCAL_EVENTS_ROOT), *([str(MULTIMEDIA_EVENTS_ROOT)] if SHARED_DRIVE_CONFIGURED else [])
+    ]
+    HERO_WORKSPACE_ROOT = Path(os.environ.get(
+        "HERO_WORKSPACE_ROOT", str(Path.home() / "Documents" / "ECC Media Workspace")
+    )).expanduser()
+    HERO_PUBLISH_ROOT = Path(os.environ.get(
+        "HERO_PUBLISH_ROOT",
+        str(MULTIMEDIA_EVENTS_ROOT.parent / "07_Brand_&_Assets" / "Hero_Shot_Library") if SHARED_DRIVE_CONFIGURED else ""
+    )).expanduser()
+    HERO_CATALOG_PATH = Path(os.environ.get(
+        "HERO_CATALOG_PATH",
+        str(Path.home() / "Library" / "Application Support" / APP_NAME / "hero_library.sqlite3"),
+    )).expanduser()
+
+    @classmethod
+    def set_hero_settings(cls, source_roots: list[str], workspace_root: str, publish_root: str) -> None:
+        roots = [str(Path(value).expanduser()) for value in source_roots if str(value).strip()]
+        if not roots or not workspace_root.strip() or not publish_root.strip():
+            raise ValueError("Choose source, local workspace, and shared Hero Library folders.")
+        cls.HERO_SOURCE_ROOTS = roots
+        cls.HERO_WORKSPACE_ROOT = Path(workspace_root).expanduser()
+        cls.HERO_PUBLISH_ROOT = Path(publish_root).expanduser()
+        _write_local_settings(cls.LOCAL_SETTINGS_PATH, {
+            "HERO_SOURCE_ROOTS": json.dumps(roots),
+            "HERO_WORKSPACE_ROOT": str(cls.HERO_WORKSPACE_ROOT),
+            "HERO_PUBLISH_ROOT": str(cls.HERO_PUBLISH_ROOT),
+        })
 
     @classmethod
     def set_default_event_year(cls, event_year: str) -> None:

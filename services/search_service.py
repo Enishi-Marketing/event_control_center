@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from services.metadata_service import MetadataService
+from services.keyword_service import KeywordVocabulary, keyword_key
 
 
 @dataclass(frozen=True)
@@ -87,9 +88,7 @@ class MetadataSearchService:
             suggestions=self._suggestions(records),
             school_years=self._unique_values(record.school_year for record in records),
             grades=self._unique_values(grade for record in records for grade in record.grades),
-            keywords=self._unique_values(
-                keyword for record in records for keyword in record.keywords
-            ),
+            keywords=[entry.display_value for entry in KeywordVocabulary.from_events(records).entries],
             errors=errors,
         )
 
@@ -112,7 +111,7 @@ class MetadataSearchService:
             date=self._string(data.get("date")),
             school_year=self._string(data.get("school_year")),
             grades=self._string_list(data.get("grades")),
-            keywords=self.metadata_service.normalize_keywords(data.get("keywords")),
+            keywords=KeywordVocabulary().canonicalize(data.get("keywords")),
             description=self._string(data.get("description")),
             photo_count=self._int(data.get("photo_count")),
             video_count=self._int(data.get("video_count")),
@@ -139,9 +138,9 @@ class MetadataSearchService:
     def _unique_values(self, values: object) -> list[str]:
         unique: dict[str, str] = {}
         for value in values:
-            text = str(value).strip()
+            text = " ".join(str(value).split())
             if text:
-                unique.setdefault(text.casefold(), text)
+                unique.setdefault(keyword_key(text), text)
         return sorted(unique.values(), key=str.casefold)
 
     def _string(self, value: object) -> str:

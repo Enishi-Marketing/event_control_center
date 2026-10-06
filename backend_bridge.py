@@ -20,7 +20,9 @@ from config.config import AppConfig
 from services.archive_service import ArchiveService
 from services.drive_detector import DriveDetector
 from services.folder_service import FolderService
+from services.hero_library_service import HeroLibraryService
 from services.importer import ImportProgress, ImportService, MediaScanResult
+from services.keyword_service import KeywordVocabulary
 from services.media_count_service import MediaCountService
 from services.metadata_service import MetadataService
 from services.project_service import ProjectService
@@ -43,6 +45,9 @@ def _config() -> dict[str, str]:
         "google_sheets_worksheet_name": AppConfig.GOOGLE_SHEETS_WORKSHEET_NAME,
         "lightroom_template_dir": AppConfig.LIGHTROOM_TEMPLATE_OVERRIDE,
         "premiere_template": AppConfig.PREMIERE_TEMPLATE_OVERRIDE,
+        "hero_source_roots": AppConfig.HERO_SOURCE_ROOTS,
+        "hero_workspace_root": str(AppConfig.HERO_WORKSPACE_ROOT),
+        "hero_publish_root": str(AppConfig.HERO_PUBLISH_ROOT),
     }
 
 
@@ -143,6 +148,7 @@ def _create_event(payload: dict[str, Any]) -> dict[str, Any]:
     if existing and not bool(payload.get("allow_overwrite", False)):
         raise ValueError("An event with this name and date already exists.")
 
+    vocabulary = _event_keyword_vocabulary()
     result = folders.create_event_folders(event_date, event_name)
     metadata = MetadataService().create_metadata(
         event_name=event_name,
@@ -151,6 +157,7 @@ def _create_event(payload: dict[str, Any]) -> dict[str, Any]:
         description=str(payload.get("description", "")),
         keywords_text=payload.get("keywords", []),
         grades=[str(value) for value in payload.get("grades", [])],
+        keyword_vocabulary=vocabulary,
     )
     MetadataService().write_metadata(result.metadata_path, metadata)
     return {
@@ -531,11 +538,40 @@ def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         "archive_events": _archive_events,
         "save_settings": _save_settings,
         "search_events": _search_events,
+        "keyword_vocabulary": lambda _payload: {"entries": [asdict(entry) for entry in _event_keyword_vocabulary().entries]},
+        "hero_list": lambda _values: {"assets": HeroLibraryService().list_assets()},
+        "hero_scan": lambda values: HeroLibraryService().scan(values.get("roots")),
+        "hero_refresh": lambda values: HeroLibraryService().refresh(values.get("limit")),
+        "hero_workspace": lambda _values: HeroLibraryService().ensure_catalog(),
+        "hero_update": lambda values: HeroLibraryService().update_with_summary(
+            values.get("asset_ids", []), values.get("changes", {})
+        ),
+        "hero_remove": lambda values: {"assets": HeroLibraryService().remove(values.get("asset_ids", []))},
+        "hero_restore": lambda values: {"assets": HeroLibraryService().restore(values.get("asset_ids", []))},
+        "hero_stage": lambda values: {"assets": HeroLibraryService().stage(values.get("asset_ids", []))},
+        "hero_match_exports": lambda _values: HeroLibraryService().match_exports(),
+        "hero_publish": lambda values: {"assets": HeroLibraryService().publish(values.get("asset_ids", []))},
+        "hero_push_batch": lambda values: HeroLibraryService().push_batch(values.get("asset_ids", [])),
+        "hero_push_originals": lambda values: HeroLibraryService().push_originals(values.get("asset_ids", [])),
+        "hero_rename_published": lambda values: HeroLibraryService().rename_published(bool(values.get("dry_run", False))),
+        "hero_reorganize": lambda values: HeroLibraryService().reorganize_published(values.get("asset_ids")),
+        "hero_audit_drive": lambda _values: HeroLibraryService().audit_drive(),
+        "hero_adopt_drive": lambda values: HeroLibraryService().adopt_drive(values.get("paths", [])),
+        "hero_save_settings": _save_hero_settings,
     }
     try:
         return commands[command](payload)
     except KeyError as exc:
         raise ValueError(f"Unknown backend command: {command}") from exc
+
+
+def _save_hero_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    AppConfig.set_hero_settings(
+        payload.get("source_roots", []),
+        str(payload.get("workspace_root", "")),
+        str(payload.get("publish_root", "")),
+    )
+    return _config()
 
 
 def _save_settings(payload: dict[str, Any]) -> dict[str, Any]:
@@ -568,6 +604,14 @@ def _search_events(payload: dict[str, Any]) -> dict[str, Any]:
         "keywords": index.keywords,
         "errors": index.errors,
     }
+
+
+def _event_keyword_vocabulary() -> KeywordVocabulary:
+    roots = _search_roots("All event folders")
+    for index, root in enumerate(AppConfig.HERO_SOURCE_ROOTS, start=1):
+        roots[f"Hero photo source {index}"] = Path(root)
+    index = MetadataSearchService().build_index(roots)
+    return KeywordVocabulary.from_events(index.records)
 
 
 def main() -> None:
