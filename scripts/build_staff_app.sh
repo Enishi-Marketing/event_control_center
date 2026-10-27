@@ -12,7 +12,7 @@ if ! "$PYTHON_BIN" -m PyInstaller --version >/dev/null 2>&1; then
   echo "PyInstaller is missing. Run: $PYTHON_BIN -m pip install -r requirements-build.txt"
   exit 1
 fi
-if ! "$PYTHON_BIN" -c 'import cv2, googleapiclient, numpy, PIL, pillow_heif, tqdm' >/dev/null 2>&1; then
+if ! "$PYTHON_BIN" -c 'import cv2, googleapiclient, imageio_ffmpeg, numpy, PIL, pillow_heif, tqdm; imageio_ffmpeg.get_ffmpeg_exe()' >/dev/null 2>&1; then
   echo "Runtime dependencies are missing. Run: $PYTHON_BIN -m pip install -r requirements.txt"
   exit 1
 fi
@@ -36,7 +36,11 @@ UPDATE_FEED_URL="https://github.com/$RELEASE_REPOSITORY/releases/latest/download
 
 export PYINSTALLER_CONFIG_DIR="${PYINSTALLER_CONFIG_DIR:-$PWD/.pyinstaller}"
 "$PYTHON_BIN" -m PyInstaller EventControlBackend.spec --noconfirm --clean
-swift build --package-path swiftui --configuration release --scratch-path "$PWD/build/swift"
+SWIFT_BUILD_ARGS=(--package-path swiftui --configuration release --scratch-path "$PWD/build/swift")
+if [ -n "${ECC_SWIFT_SDK:-}" ]; then
+  SWIFT_BUILD_ARGS+=(--sdk "$ECC_SWIFT_SDK" --build-system native)
+fi
+swift build "${SWIFT_BUILD_ARGS[@]}"
 
 APP_PATH="$PWD/dist/Event Control Center.app"
 rm -rf "$APP_PATH"

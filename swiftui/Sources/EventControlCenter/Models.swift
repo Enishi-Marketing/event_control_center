@@ -237,6 +237,8 @@ struct ImportOutcome: Codable {
     let skipped: Int
     let failed: Int
     let jpgsGenerated: Int
+    let socialVideosGenerated: Int
+    let socialVideosFailed: Int
     let failures: [String]
     let importedSources: [String]
 }
@@ -322,6 +324,25 @@ struct JPGStreamEvent: Codable {
     let currentFile: String?
     let message: String?
     let result: JPGResult?
+    let error: String?
+}
+
+struct SocialVideoResult: Codable {
+    let generated: Int
+    let skipped: Int
+    let failed: Int
+    let sourceBytes: Int64
+    let outputBytes: Int64
+    let failures: [String]
+}
+
+struct SocialVideoStreamEvent: Codable {
+    let type: String
+    let current: Int?
+    let total: Int?
+    let currentFile: String?
+    let message: String?
+    let result: SocialVideoResult?
     let error: String?
 }
 

@@ -64,6 +64,18 @@ class KeywordVocabularyTests(unittest.TestCase):
             self.assertEqual(refreshed.by_key["sports"].usage_count, 2)
             self.assertIn("sports day", refreshed.by_key)
 
+    def test_bank_ranks_usage_then_recency_then_name_and_excludes_selected(self) -> None:
+        vocabulary = KeywordVocabulary.from_events([
+            event(["Sports", "Sports", "Campus"], "2025-01-01"),
+            event(["Sports"], "2025-02-01"),
+            event(["Arts", "Assembly"], "2026-01-01"),
+        ])
+        self.assertEqual([entry.display_value for entry in vocabulary.bank()],
+                         ["Sports", "Arts", "Assembly", "Campus"])
+        self.assertEqual([entry.display_value for entry in vocabulary.bank([" SPORTS ", "arts"])],
+                         ["Assembly", "Campus"])
+        self.assertEqual(KeywordVocabulary().bank(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

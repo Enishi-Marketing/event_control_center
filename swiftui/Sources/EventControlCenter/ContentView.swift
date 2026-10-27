@@ -488,7 +488,10 @@ struct ImportView: View {
         if let outcome = await app.importMedia(payload, onProgress: { event in
             importProgress = event
         }) {
-            app.notice = "Imported \(outcome.photosImported) photos and \(outcome.videosImported) videos. Generated \(outcome.jpgsGenerated) JPGs."
+            app.notice = "Imported \(outcome.photosImported) photos and \(outcome.videosImported) videos. Generated \(outcome.jpgsGenerated) JPGs and \(outcome.socialVideosGenerated) smaller video copies."
+            if !outcome.failures.isEmpty {
+                app.errorMessage = "Import finished with issues:\n\n" + outcome.failures.prefix(5).joined(separator: "\n")
+            }
             app.notifyImportFinished(eventName: eventName, outcome: outcome)
             if importedFromRemovableCard && !outcome.importedSources.isEmpty {
                 pendingSourceCleanup = outcome
@@ -897,6 +900,9 @@ struct UtilitiesView: View {
     @State private var isGeneratingJPGs = false
     @State private var regeneratingJPGs = false
     @State private var jpgProgress: JPGStreamEvent?
+    @State private var isCompressingVideos = false
+    @State private var videoProgress: SocialVideoStreamEvent?
+    @State private var videoSummary: String?
     @State private var choosingFolder = false
     @State private var folderPurpose: FolderPurpose = .event
     @State private var yearRoot = ""
@@ -925,7 +931,7 @@ struct UtilitiesView: View {
                             .disabled(app.isWorking || isGeneratingJPGs)
                         HStack {
                             Button("Choose event folder") { openFolderPicker(.event) }
-                                .disabled(isGeneratingJPGs)
+                                .disabled(app.isWorking || isGeneratingJPGs)
                             Spacer()
                             Button("Generate missing JPGs") { Task { await createJPGs(false) } }
                                 .buttonStyle(.borderedProminent)
@@ -938,6 +944,7 @@ struct UtilitiesView: View {
                         }
                     }
                 }
+                staffVideoCard
                 Card {
                     VStack(alignment: .leading, spacing: 14) {
                         Label("Metadata counts", systemImage: "number.circle").font(.headline)
@@ -1121,6 +1128,54 @@ struct UtilitiesView: View {
         archiveSummary = result
         app.notice = "Archive complete: \(result.moved) moved, \(result.skipped) skipped, \(result.failed) failed."
         await loadArchiveCandidates()
+    }
+
+    private var staffVideoCard: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Smaller Videos", systemImage: "video.badge.waveform").font(.headline)
+                Text(eventFolder.isEmpty ? "Choose an event folder, including one on Google Drive." : eventFolder)
+                    .lineLimit(1).foregroundStyle(.secondary)
+                Text("Creates smaller MP4 files in Raw/Smaller Videos, alongside Raw/Videos. Keeps 1080p dimensions; only larger clips are resized. About 40 MB per minute or less, with audio. Originals stay in Raw/Videos.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Button("Choose event folder") { openFolderPicker(.event) }
+                        .disabled(app.isWorking)
+                    Spacer()
+                    Button("Create missing copies") { Task { await compressVideos(false) } }
+                        .disabled(eventFolder.isEmpty || app.isWorking)
+                    Button("Rebuild compressed copies") { Task { await compressVideos(true) } }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(eventFolder.isEmpty || app.isWorking)
+                }
+                if isCompressingVideos {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text("Compressing clip \(videoProgress?.current ?? 0) of \(videoProgress?.total ?? 0)")
+                        Spacer()
+                    }
+                    Text(videoProgress?.currentFile.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0).lastPathComponent }
+                         ?? videoProgress?.message ?? "Preparing video copies…")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if let videoSummary { Text(videoSummary).font(.caption).textSelection(.enabled) }
+            }
+        }
+    }
+
+    private func compressVideos(_ regenerate: Bool) async {
+        guard !isCompressingVideos else { return }
+        isCompressingVideos = true
+        videoProgress = nil
+        videoSummary = nil
+        defer { isCompressingVideos = false }
+        if let result = await app.generateSocialVideos(folder: eventFolder, regenerateAll: regenerate, onProgress: { videoProgress = $0 }) {
+            let sourceSize = ByteCountFormatter.string(fromByteCount: result.sourceBytes, countStyle: .file)
+            let outputSize = ByteCountFormatter.string(fromByteCount: result.outputBytes, countStyle: .file)
+            videoSummary = "\(result.generated) copies created, \(result.skipped) unchanged, \(result.failed) failed. New copies: \(sourceSize) → \(outputSize)."
+            app.notice = videoSummary ?? "Video compression complete."
+            if !result.failures.isEmpty { app.errorMessage = result.failures.prefix(5).joined(separator: "\n") }
+        }
     }
 
     private func createJPGs(_ regenerate: Bool) async {

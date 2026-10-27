@@ -114,6 +114,12 @@ struct BackendClient {
         try streamEvents("generate_jpgs_stream", payload: payload)
     }
 
+    func socialVideoEvents<Payload: Encodable>(
+        payload: Payload
+    ) throws -> AsyncThrowingStream<SocialVideoStreamEvent, Error> {
+        try streamEvents("generate_social_videos_stream", payload: payload)
+    }
+
     private func streamEvents<Payload: Encodable, StreamEvent: Decodable>(
         _ command: String,
         payload: Payload

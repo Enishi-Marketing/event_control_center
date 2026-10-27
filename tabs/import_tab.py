@@ -59,6 +59,9 @@ class KeywordPillInput(ttk.Frame):
         self.suggestion_list.grid(row=1, column=1, sticky="ew")
         self.suggestion_list.grid_remove()
         self.suggestion_list.bind("<ButtonRelease-1>", self._select_suggestion)
+        self.bank_frame = ttk.Frame(self)
+        self.bank_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self._render_bank()
 
     def set_vocabulary(self, vocabulary: KeywordVocabulary) -> None:
         self.vocabulary = vocabulary
@@ -191,6 +194,39 @@ class KeywordPillInput(ttk.Frame):
                 padx=4,
                 pady=0,
             ).pack(side="left", padx=(4, 0))
+
+        self._render_bank()
+
+    def _render_bank(self) -> None:
+        for child in self.bank_frame.winfo_children():
+            child.destroy()
+        ttk.Label(self.bank_frame, text="Keyword bank · most used first:").pack(side="left", padx=(0, 6))
+        available = self.vocabulary.bank(self.keywords)
+        if not available:
+            text = "All bank keywords added." if self.vocabulary.entries else "Save event keywords to build your bank."
+            ttk.Label(self.bank_frame, text=text).pack(side="left")
+            return
+        for entry in available[:5]:
+            ttk.Button(
+                self.bank_frame, text=f"+ {entry.display_value}", takefocus=False,
+                command=lambda value=entry.display_value: self._add_bank_keyword(value),
+            ).pack(side="left", padx=(0, 4))
+        if len(available) > 5:
+            more = ttk.Menubutton(self.bank_frame, text=f"More ({len(available) - 5})")
+            menu = tk.Menu(more, tearoff=False)
+            for entry in available[5:]:
+                menu.add_command(
+                    label=f"{entry.display_value} ({entry.usage_count})",
+                    command=lambda value=entry.display_value: self._add_bank_keyword(value),
+                )
+            more.configure(menu=menu)
+            more.pack(side="left")
+
+    def _add_bank_keyword(self, keyword: str) -> None:
+        self.keywords = self.vocabulary.canonicalize([*self.keywords, keyword])
+        self._render_pills()
+        self._show_suggestions()
+        self.entry.focus_set()
 
     def _remove_keyword(self, keyword: str) -> None:
         self.keywords = [value for value in self.keywords if value != keyword]
@@ -1000,6 +1036,10 @@ class ImportTab(ttk.Frame):
         jpg_skipped = getattr(jpg_summary, "skipped", 0)
         jpg_failed = getattr(jpg_summary, "failed", 0)
         project_failures = getattr(project_summary, "failures", [])
+        import_failures = getattr(import_summary, "failures", [])
+        import_warning_text = "\n".join(str(failure) for failure in import_failures[:5])
+        if import_warning_text:
+            import_warning_text += "\n"
         project_warning_text = (
             "\n" + "\n".join(str(failure) for failure in project_failures)
             if project_failures
@@ -1026,6 +1066,9 @@ class ImportTab(ttk.Frame):
             f"{title}\n"
             f"Photos Imported:\n{photos}\n"
             f"Videos Imported:\n{videos}\n"
+            f"Smaller Videos Generated:\n{getattr(import_summary, 'social_videos_generated', 0)}\n"
+            f"Smaller Video Failures:\n{getattr(import_summary, 'social_videos_failed', 0)}\n"
+            f"{import_warning_text}"
             f"Skipped:\n{skipped}\n"
             f"Failed:\n{failed}\n"
             f"Unedited JPGs Generated:\n{jpg_generated}\n"

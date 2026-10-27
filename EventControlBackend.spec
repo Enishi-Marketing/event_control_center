@@ -1,7 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 """Standalone Python service for the native macOS app."""
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files, copy_metadata
+from imageio_ffmpeg import get_ffmpeg_exe
 import os
 
 
@@ -12,13 +13,16 @@ hiddenimports = (
     + collect_submodules("google_auth_httplib2")
     + collect_submodules("httplib2")
     + collect_submodules("uritemplate")
+    + collect_submodules("imageio_ffmpeg")
 )
 
 a = Analysis(
     ["backend_bridge.py"],
     pathex=[],
-    binaries=[],
-    datas=[("assets/templates", "templates")],
+    binaries=[(get_ffmpeg_exe(), "imageio_ffmpeg/binaries")],
+    datas=[("assets/templates", "templates")]
+    + collect_data_files("imageio_ffmpeg", excludes=["binaries/ffmpeg-*"])
+    + copy_metadata("imageio-ffmpeg"),
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

@@ -113,6 +113,27 @@ macOS notification when an import finishes; macOS may ask for notification
 permission the first time.
 
 Click a keyword chip to remove it from an event before saving.
+The **Keyword bank** below the keyword field lets you add saved keywords with a
+click. It puts the most-used keywords first, breaks ties by recency and name,
+and hides keywords already selected. Choose **Show all** for the full bank.
+
+Each new event includes **Raw/Smaller Videos**, alongside **Raw/Videos**, at the
+selected local or shared-drive destination. When preparing an existing event,
+ECC moves an earlier top-level `Smaller Videos` or `Social Videos` folder into
+`Raw/Smaller Videos` if that destination does not already exist, retaining its copies.
+Video imports automatically create compressed H.264/AAC MP4 copies there using
+the bundled encoder. Existing 1080p and smaller dimensions are kept; only larger
+clips are resized to fit 1920×1080 landscape or 1080×1920 portrait. Video bitrate
+is capped at about 5 Mbps, plus 128 kbps audio: roughly 40 MB per minute or less,
+depending on the footage. Aspect ratio and orientation are preserved. Original
+videos stay in `Raw/Videos`. Conversion issues appear in the import results and
+`Data/import.log`, and successfully verified originals remain imported. Existing
+events receive smaller video copies for newly imported videos. For older events, use
+**Utilities → Smaller Videos**, choose the event folder (local or Drive),
+and choose **Create missing copies** or **Rebuild compressed copies**. Rebuilding
+replaces only the generated copies, after each replacement finishes successfully.
+The result shows the original and compressed sizes for newly generated copies.
+Staff should download `Raw/Smaller Videos`, rather than the full event or `Raw/Videos`.
 
 This build targets the CPU architecture of the Mac on which it is built. Build
 on Apple Silicon for Apple Silicon staff Macs; an Intel build needs an Intel
@@ -289,7 +310,7 @@ python3 main.py
 - Import tab for event name, description, keywords, and grade selections
 - Editable event date and school year fields
 - Event folder creation under the configured event root
-- Standard event subfolders for Data, Raw, and Finals
+- Standard event subfolders for Data, Raw, and Finals, with Smaller Videos under Raw
 - metadata.json generation in the event Data folder
 - Cleaned keyword output with whitespace removed, empty values removed, duplicates removed, and alphabetical sorting
 - Pretty-printed JSON output to the terminal

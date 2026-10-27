@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from services.social_video_service import SMALLER_VIDEO_FOLDER, SocialVideoService
+
 
 @dataclass(frozen=True)
 class EventFolderResult:
@@ -18,6 +20,7 @@ class FolderService:
         Path("Data"),
         Path("Raw"),
         Path("Finals"),
+        SMALLER_VIDEO_FOLDER,
     )
 
     def __init__(self, event_root: Path) -> None:
@@ -37,6 +40,7 @@ class FolderService:
         already_exists = event_folder.exists()
 
         event_folder.mkdir(parents=True, exist_ok=True)
+        SocialVideoService.prepare_folder(event_folder)
         for subfolder in self.SUBFOLDERS:
             (event_folder / subfolder).mkdir(parents=True, exist_ok=True)
 

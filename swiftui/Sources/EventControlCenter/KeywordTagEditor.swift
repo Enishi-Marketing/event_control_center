@@ -43,6 +43,15 @@ enum KeywordTags {
         }
         return Array(matches.prefix(8))
     }
+
+    static func bank(in vocabulary: [KeywordSuggestion], excluding tags: [String]) -> [KeywordSuggestion] {
+        let excluded = Set(tags.map(key))
+        return vocabulary.filter { !excluded.contains($0.normalizedValue) }.sorted {
+            if $0.usageCount != $1.usageCount { return $0.usageCount > $1.usageCount }
+            if $0.lastUsed != $1.lastUsed { return $0.lastUsed > $1.lastUsed }
+            return $0.displayValue.localizedCaseInsensitiveCompare($1.displayValue) == .orderedAscending
+        }
+    }
 }
 
 struct TagEditor: View {
@@ -53,6 +62,15 @@ struct TagEditor: View {
     @FocusState private var inputFocused: Bool
     @State private var showSuggestions = true
     @State private var highlighted = -1
+    @State private var showAllKeywords = false
+
+    private var bank: [KeywordSuggestion] {
+        KeywordTags.bank(in: suggestions, excluding: tags)
+    }
+
+    private var visibleBank: [KeywordSuggestion] {
+        showAllKeywords ? bank : Array(bank.prefix(12))
+    }
 
     private var matches: [KeywordSuggestion] {
         KeywordTags.matches(draft, in: suggestions, excluding: tags)
@@ -134,6 +152,42 @@ struct TagEditor: View {
                 }
                 .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.12)))
+            }
+            HStack {
+                Text("Keyword bank").font(.caption.weight(.medium))
+                Text("Most used first").font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                if bank.count > 12 {
+                    Button(showAllKeywords ? "Show fewer" : "Show all (\(bank.count))") {
+                        showAllKeywords.toggle()
+                    }
+                    .buttonStyle(.plain).font(.caption).foregroundStyle(.cyan)
+                }
+            }
+            if suggestions.isEmpty {
+                Text("Keywords saved with events will appear here.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if bank.isEmpty {
+                Text("All bank keywords added.").font(.caption).foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)], alignment: .leading, spacing: 6) {
+                        ForEach(visibleBank, id: \.normalizedValue) { keyword in
+                            Button {
+                                add(keyword.displayValue, clearDraft: false)
+                            } label: {
+                                Label(keyword.displayValue, systemImage: "plus")
+                                    .font(.caption).lineLimit(1)
+                                    .padding(.horizontal, 9).padding(.vertical, 5)
+                                    .background(.white.opacity(0.06), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .help("Add \(keyword.displayValue) · used in \(keyword.usageCount) events")
+                            .accessibilityLabel("Add keyword \(keyword.displayValue)")
+                        }
+                    }
+                }
+                .frame(maxHeight: showAllKeywords ? 180 : 96)
             }
         }
         .onChange(of: draft) { _, value in

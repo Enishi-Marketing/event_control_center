@@ -15,6 +15,7 @@ from PIL import Image
 from services.hash_service import HashService
 from services.metadata_service import MetadataService
 from services.photo_brightness import brighten
+from services.social_video_service import SocialVideoService
 
 
 PHOTO_EXTENSIONS = {
@@ -132,6 +133,8 @@ class ImportSummary:
     skipped: int = 0
     failed: int = 0
     cancelled: bool = False
+    social_videos_generated: int = 0
+    social_videos_failed: int = 0
     imported_sources: list[Path] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
 
@@ -291,6 +294,20 @@ class ImportService:
                 summary.videos_imported += 1
             summary.imported_sources.append(media_file.path)
 
+            if media_file.media_type == "video" and not cancel_event.is_set():
+                self._emit_progress(
+                    progress_callback, index, total, destination,
+                    message="Compressing staff video copy (up to 1080p)…",
+                    current_bytes=media_file.size, total_bytes=media_file.size,
+                    phase="Creating smaller video",
+                )
+                try:
+                    if SocialVideoService().create_copy(destination, event_folder):
+                        summary.social_videos_generated += 1
+                except Exception as exc:
+                    summary.social_videos_failed += 1
+                    summary.failures.append(f"Smaller video copy for {destination.name}: {exc}")
+
         metadata_path = event_folder / "Data" / "metadata.json"
         if metadata_path.exists():
             self.metadata_service.update_import_counts(
@@ -323,6 +340,10 @@ class ImportService:
             str(summary.photos_imported),
             "Videos Imported:",
             str(summary.videos_imported),
+            "Smaller Videos Generated:",
+            str(summary.social_videos_generated),
+            "Smaller Video Failures:",
+            str(summary.social_videos_failed),
             "Skipped:",
             str(summary.skipped),
             "Failures:",

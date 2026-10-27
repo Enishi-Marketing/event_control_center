@@ -434,6 +434,33 @@ final class AppState: ObservableObject {
         }
     }
 
+    func generateSocialVideos(
+        folder: String, regenerateAll: Bool,
+        onProgress: @escaping (SocialVideoStreamEvent) -> Void
+    ) async -> SocialVideoResult? {
+        struct Payload: Codable { let eventFolder: String; let regenerateAll: Bool }
+        guard let client else {
+            errorMessage = "The Python backend is unavailable."
+            return nil
+        }
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            let events = try client.socialVideoEvents(payload: Payload(eventFolder: folder, regenerateAll: regenerateAll))
+            var result: SocialVideoResult?
+            for try await event in events {
+                if event.type == "progress" { onProgress(event) }
+                else if event.type == "error" { throw BackendError.failed(event.error ?? "Video compression failed.") }
+                else if event.type == "completed" { result = event.result }
+            }
+            guard let result else { throw BackendError.failed("Video compression stopped before returning a summary.") }
+            return result
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
     func updateMediaCounts(root: String) async -> CountResult? {
         struct Payload: Codable { let eventRoot: String }
         var result: CountResult?

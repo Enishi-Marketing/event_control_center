@@ -108,3 +108,12 @@ class KeywordVocabulary:
         matches.sort(key=lambda entry: entry.usage_count, reverse=True)
         matches.sort(key=lambda entry: match_rank(entry.normalized_value))
         return matches[:limit]
+
+    def bank(self, excluded: Iterable[str] = ()) -> list[KeywordEntry]:
+        """Return available keywords by event usage, then recency and name."""
+        excluded_keys = {keyword_key(value) for value in excluded}
+        entries = [entry for entry in self.entries if entry.normalized_value not in excluded_keys]
+        entries.sort(key=lambda entry: entry.display_value.casefold())
+        entries.sort(key=lambda entry: entry.last_used, reverse=True)
+        entries.sort(key=lambda entry: entry.usage_count, reverse=True)
+        return entries

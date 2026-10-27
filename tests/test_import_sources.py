@@ -37,6 +37,11 @@ class ImportSourceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "output folder"):
                 _validate_import_paths(photos, event)
 
+            social = event / "Raw" / "Smaller Videos"
+            social.mkdir()
+            with self.assertRaisesRegex(ValueError, "output folder"):
+                _validate_import_paths(social, event)
+
             unimported = event / "To Import"
             unimported.mkdir()
             _validate_import_paths(unimported, event)

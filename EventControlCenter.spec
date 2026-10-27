@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files, copy_metadata
+from imageio_ffmpeg import get_ffmpeg_exe
 
 
 app_version = Path("VERSION").read_text(encoding="utf-8").strip()
@@ -15,13 +16,16 @@ hiddenimports = (
     + collect_submodules("google_auth_httplib2")
     + collect_submodules("httplib2")
     + collect_submodules("uritemplate")
+    + collect_submodules("imageio_ffmpeg")
 )
 
 a = Analysis(
     ["main.py"],
     pathex=[],
-    binaries=[],
-    datas=[("assets/app_logo.png", "assets"), ("assets/templates", "templates")],
+    binaries=[(get_ffmpeg_exe(), "imageio_ffmpeg/binaries")],
+    datas=[("assets/app_logo.png", "assets"), ("assets/templates", "templates")]
+    + collect_data_files("imageio_ffmpeg", excludes=["binaries/ffmpeg-*"])
+    + copy_metadata("imageio-ffmpeg"),
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

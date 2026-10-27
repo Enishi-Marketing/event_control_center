@@ -28,6 +28,7 @@ from services.metadata_service import MetadataService
 from services.project_service import ProjectService
 from services.search_service import MetadataSearchRecord, MetadataSearchService
 from services.source_cleanup_service import SourceCleanupService
+from services.social_video_service import SocialVideoProgress, SocialVideoService
 from services.sync_service import SyncService
 from services.unedited_jpg_service import UneditedJpgProgress, UneditedJpgService
 
@@ -192,7 +193,7 @@ def _validate_import_paths(source: Path, event_folder: Path) -> None:
         raise ValueError("Choose the folder holding the original media, not the event folder or its parent.")
     if source.is_relative_to(event_folder):
         first_part = source.relative_to(event_folder).parts[0]
-        if first_part in {"Raw", "Unedited JPGs", "Finals", "Data"}:
+        if first_part in {"Raw", "Unedited JPGs", "Finals", "Data", "Smaller Videos", "Social Videos"}:
             raise ValueError("Choose unimported media, not an output folder inside the event.")
 
 
@@ -244,6 +245,8 @@ def _import_media(
         "skipped": summary.skipped,
         "failed": summary.failed,
         "jpgs_generated": jpg_summary.generated,
+        "social_videos_generated": summary.social_videos_generated,
+        "social_videos_failed": summary.social_videos_failed,
         "failures": summary.failures + jpg_summary.failures,
         "imported_sources": [str(path) for path in summary.imported_sources],
     }
@@ -375,6 +378,8 @@ def _stream_import_media(payload: dict[str, Any]) -> None:
             "skipped": summary.skipped,
             "failed": summary.failed,
             "jpgs_generated": jpg_summary.generated,
+            "social_videos_generated": summary.social_videos_generated,
+            "social_videos_failed": summary.social_videos_failed,
             "failures": summary.failures + jpg_summary.failures + project_summary.failures,
             "imported_sources": [str(path) for path in summary.imported_sources],
         }
@@ -423,6 +428,27 @@ def _stream_generate_jpgs(payload: dict[str, Any]) -> None:
         _emit_stream_event("error", error=str(exc))
         return
 
+    _emit_stream_event("completed", result=asdict(summary))
+
+
+def _stream_generate_social_videos(payload: dict[str, Any]) -> None:
+    def progress_callback(progress: SocialVideoProgress) -> None:
+        _emit_stream_event(
+            "progress", current=progress.current, total=progress.total,
+            current_file=str(progress.current_file) if progress.current_file else "",
+            message=progress.message,
+        )
+
+    try:
+        _emit_stream_event("progress", current=0, total=0, message="Preparing staff video copies…")
+        summary = SocialVideoService().generate_for_event(
+            Path(str(payload["event_folder"])),
+            regenerate_all=bool(payload.get("regenerate_all", False)),
+            progress_callback=progress_callback,
+        )
+    except Exception as exc:
+        _emit_stream_event("error", error=str(exc))
+        return
     _emit_stream_event("completed", result=asdict(summary))
 
 
@@ -626,6 +652,9 @@ def main() -> None:
             return
         if command == "generate_jpgs_stream":
             _stream_generate_jpgs(payload)
+            return
+        if command == "generate_social_videos_stream":
+            _stream_generate_social_videos(payload)
             return
         data = _dispatch(command, payload)
         print(json.dumps({"ok": True, "data": data}, default=str))

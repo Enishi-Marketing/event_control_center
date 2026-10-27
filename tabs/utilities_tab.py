@@ -14,6 +14,7 @@ from services.unedited_jpg_service import (
 )
 from services.media_count_service import EventRootMediaCountResult, MediaCountService
 from services.sync_service import EventRootSyncResult, SyncService
+from services.social_video_service import SocialVideoProgress, SocialVideoService, SocialVideoSummary
 
 
 class UtilitiesTab(ttk.Frame):
@@ -79,7 +80,7 @@ class UtilitiesTab(ttk.Frame):
 
         jpg_frame = ttk.LabelFrame(
             self.content,
-            text="Regenerate Unedited JPGs",
+            text="Event JPG and Staff Video Copies",
             padding=14,
         )
         jpg_frame.grid(row=0, column=0, sticky="ew")
@@ -128,6 +129,23 @@ class UtilitiesTab(ttk.Frame):
         ttk.Label(jpg_frame, textvariable=self.summary_var).grid(
             row=4, column=0, columnspan=2, sticky="w", pady=(8, 0)
         )
+        ttk.Label(
+            jpg_frame,
+            text="Staff copies go in Raw/Smaller Videos: keep 1080p dimensions; compress to about 40 MB/min or less. Originals stay in Raw/Videos.",
+            wraplength=750,
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(14, 0))
+        video_actions = ttk.Frame(jpg_frame)
+        video_actions.grid(row=6, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        self.generate_videos_button = ttk.Button(
+            video_actions, text="Create Missing Video Copies", state="disabled",
+            command=lambda: self._start_video_generation(False),
+        )
+        self.generate_videos_button.pack(side="left", padx=(0, 8))
+        self.rebuild_videos_button = ttk.Button(
+            video_actions, text="Rebuild Compressed Video Copies", state="disabled",
+            command=lambda: self._start_video_generation(True),
+        )
+        self.rebuild_videos_button.pack(side="left")
 
         counts_frame = ttk.LabelFrame(
             self.content,
@@ -411,6 +429,30 @@ class UtilitiesTab(ttk.Frame):
         except Exception as exc:
             self.worker_queue.put(("jpg_error", str(exc)))
 
+    def _start_video_generation(self, regenerate_all: bool) -> None:
+        event_folder = self._selected_event_folder()
+        if event_folder is None:
+            return
+        self.cancel_event = threading.Event()
+        self._set_busy(True)
+        self.summary_var.set("")
+        self.current_file_var.set("Preparing compressed video copies…")
+        self.progress_bar.configure(value=0, maximum=1)
+        self.worker_thread = threading.Thread(
+            target=self._video_generation_worker, args=(event_folder, regenerate_all, self.cancel_event), daemon=True,
+        )
+        self.worker_thread.start()
+
+    def _video_generation_worker(self, event_folder: Path, regenerate_all: bool, cancel_event: threading.Event) -> None:
+        try:
+            summary = SocialVideoService().generate_for_event(
+                event_folder, regenerate_all=regenerate_all, cancel_event=cancel_event,
+                progress_callback=lambda progress: self.worker_queue.put(("video_progress", progress)),
+            )
+            self.worker_queue.put(("video_success", summary))
+        except Exception as exc:
+            self.worker_queue.put(("video_error", str(exc)))
+
     def _start_sheets_sync(self) -> None:
         event_root = self._selected_sheets_event_root()
         if event_root is None:
@@ -536,7 +578,24 @@ class UtilitiesTab(ttk.Frame):
             self.after(100, self._poll_worker_queue)
 
     def _handle_worker_message(self, message: str, payload: object) -> None:
-        if message == "jpg_progress" and isinstance(payload, UneditedJpgProgress):
+        if message == "video_progress" and isinstance(payload, SocialVideoProgress):
+            completed = payload.current - 1 if payload.current_file else payload.current
+            self.progress_bar.configure(maximum=max(payload.total, 1), value=completed)
+            self.current_file_var.set(payload.current_file.name if payload.current_file else payload.message)
+            self._set_status(f"Compressing video {payload.current} / {payload.total}")
+        elif message == "video_success" and isinstance(payload, SocialVideoSummary):
+            self._set_busy(False)
+            summary = (f"Videos: {payload.generated} created, {payload.skipped} unchanged, {payload.failed} failed. "
+                       f"New copies: {payload.source_bytes / 1_000_000:.1f} MB → {payload.output_bytes / 1_000_000:.1f} MB.")
+            self.summary_var.set(summary)
+            self._set_status("Video compression cancelled." if payload.cancelled else "Video compression complete.")
+            if payload.failures:
+                messagebox.showwarning("Video Compression Issues", "\n".join(payload.failures[:5]))
+        elif message == "video_error":
+            self._set_busy(False)
+            self._set_status("Video compression failed.")
+            messagebox.showerror("Video Compression Failed", str(payload))
+        elif message == "jpg_progress" and isinstance(payload, UneditedJpgProgress):
             self._update_progress(payload)
         elif message == "jpg_success" and isinstance(payload, UneditedJpgSummary):
             self._set_busy(False)
@@ -889,6 +948,8 @@ class UtilitiesTab(ttk.Frame):
             state = "disabled"
         self.generate_missing_button.configure(state=state)
         self.regenerate_all_button.configure(state=state)
+        self.generate_videos_button.configure(state=state)
+        self.rebuild_videos_button.configure(state=state)
         sheets_state = (
             "normal" if self._selected_sheets_event_root() is not None else "disabled"
         )
@@ -914,6 +975,8 @@ class UtilitiesTab(ttk.Frame):
         state = "disabled" if busy else "normal"
         self.generate_missing_button.configure(state=state)
         self.regenerate_all_button.configure(state=state)
+        self.generate_videos_button.configure(state=state)
+        self.rebuild_videos_button.configure(state=state)
         self.sync_sheets_button.configure(state=state)
         self.update_counts_button.configure(state=state)
         self.archive_events_button.configure(state=state)
