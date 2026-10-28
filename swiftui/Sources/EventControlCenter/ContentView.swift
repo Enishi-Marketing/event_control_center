@@ -391,9 +391,9 @@ struct ImportView: View {
         if let result = await app.createEvent(payload) {
             keywords = finalKeywords
             keywordDraft = ""
-            await refreshKeywordVocabulary()
             currentFolder = result.eventFolder
             app.notice = result.alreadyExisted ? "Event metadata was updated." : "Event created and ready for media."
+            Task { await refreshKeywordVocabulary() }
         }
     }
 

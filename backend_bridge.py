@@ -149,8 +149,9 @@ def _create_event(payload: dict[str, Any]) -> dict[str, Any]:
     if existing and not bool(payload.get("allow_overwrite", False)):
         raise ValueError("An event with this name and date already exists.")
 
-    vocabulary = _event_keyword_vocabulary()
     result = folders.create_event_folders(event_date, event_name)
+    # The UI canonicalizes against its loaded suggestions. Saving an event
+    # must not depend on scanning unrelated local or cloud archives again.
     metadata = MetadataService().create_metadata(
         event_name=event_name,
         event_date=event_date,
@@ -158,7 +159,6 @@ def _create_event(payload: dict[str, Any]) -> dict[str, Any]:
         description=str(payload.get("description", "")),
         keywords_text=payload.get("keywords", []),
         grades=[str(value) for value in payload.get("grades", [])],
-        keyword_vocabulary=vocabulary,
     )
     MetadataService().write_metadata(result.metadata_path, metadata)
     return {

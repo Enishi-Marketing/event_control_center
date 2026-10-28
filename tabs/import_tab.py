@@ -570,10 +570,6 @@ class ImportTab(ttk.Frame):
         folder_result = self.folder_service.create_event_folders(event_date, event_name)
 
         self._set_status("Writing metadata...")
-        roots = {"Local Events": AppConfig.ARCHIVE_SOURCE_ROOT}
-        if AppConfig.SHARED_DRIVE_CONFIGURED:
-            roots["Google Drive"] = AppConfig.ARCHIVE_DRIVE_ROOT
-        self.keyword_input.set_vocabulary(self._build_keyword_vocabulary(roots))
         metadata = self.metadata_service.create_metadata(
             event_name=event_name,
             event_date=event_date,
