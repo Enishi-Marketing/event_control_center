@@ -130,7 +130,10 @@ struct BackendClient {
         let body = try encoder.encode(request)
 
         return AsyncThrowingStream { continuation in
-            Task.detached(priority: .userInitiated) {
+            // Keep pipe handling on a blocking worker and use the process's
+            // termination callback instead of waiting on a run loop after
+            // an async pipe read.
+            DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
                 process.executableURL = executableURL
                 process.arguments = arguments
@@ -143,33 +146,84 @@ struct BackendClient {
                 process.standardInput = input
                 process.standardOutput = output
                 process.standardError = errors
+                let exited = DispatchSemaphore(value: 0)
+                process.terminationHandler = { _ in exited.signal() }
 
                 do {
                     try process.run()
+                } catch {
+                    continuation.finish(throwing: BackendError.unavailable(
+                        "Could not start the backend at \(executableURL.path): \(error.localizedDescription)"
+                    ))
+                    return
+                }
+
+                // Drain diagnostics while reading stdout so a full stderr
+                // pipe cannot block the backend from sending progress.
+                let diagnostics = BackendDiagnostics(errors.fileHandleForReading)
+                defer {
+                    try? input.fileHandleForWriting.close()
+                    try? output.fileHandleForReading.close()
+                    try? errors.fileHandleForReading.close()
+                }
+                do {
                     input.fileHandleForWriting.write(body)
                     try? input.fileHandleForWriting.close()
 
                     let decoder = JSONDecoder()
                     decoder.keyDecodingStrategy = .convertFromSnakeCase
-                    for try await line in output.fileHandleForReading.bytes.lines {
-                        guard let data = line.data(using: .utf8) else { continue }
-                        let event = try decoder.decode(StreamEvent.self, from: data)
-                        continuation.yield(event)
+                    var pending = Data()
+                    while true {
+                        let chunk = output.fileHandleForReading.availableData
+                        if chunk.isEmpty { break }
+                        pending.append(chunk)
+                        while let newline = pending.firstIndex(of: 0x0A) {
+                            let line = Data(pending[..<newline])
+                            pending.removeSubrange(...newline)
+                            if !line.isEmpty {
+                                continuation.yield(try decoder.decode(StreamEvent.self, from: line))
+                            }
+                        }
                     }
-                    process.waitUntilExit()
+                    if !pending.isEmpty {
+                        continuation.yield(try decoder.decode(StreamEvent.self, from: pending))
+                    }
+                    exited.wait()
+                    let errorData = diagnostics.read()
                     if process.terminationStatus != 0 {
-                        let message = String(
-                            data: errors.fileHandleForReading.readDataToEndOfFile(),
-                            encoding: .utf8
-                        ) ?? "Backend process stopped unexpectedly."
-                        continuation.finish(throwing: BackendError.failed(message))
+                        let message = String(data: errorData, encoding: .utf8)?
+                            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        continuation.finish(throwing: BackendError.failed(
+                            message.isEmpty ? "Backend process stopped unexpectedly." : message
+                        ))
                     } else {
                         continuation.finish()
                     }
                 } catch {
+                    if process.isRunning { process.terminate() }
+                    exited.wait()
+                    _ = diagnostics.read()
                     continuation.finish(throwing: error)
                 }
             }
+        }
+    }
+
+    private final class BackendDiagnostics: @unchecked Sendable {
+        private let finished = DispatchGroup()
+        private var data = Data()
+
+        init(_ handle: FileHandle) {
+            finished.enter()
+            DispatchQueue.global(qos: .utility).async {
+                self.data = handle.readDataToEndOfFile()
+                self.finished.leave()
+            }
+        }
+
+        func read() -> Data {
+            finished.wait()
+            return data
         }
     }
 
