@@ -371,10 +371,10 @@ struct ArchiveCandidate: Codable, Identifiable, Hashable {
     let destinationExists: Bool
 
     var id: String { source }
-    var isReadyToArchive: Bool { !alreadyArchived && !destinationExists }
+    var isReadyToArchive: Bool { !alreadyArchived }
     var availabilityLabel: String {
         if alreadyArchived { return "Already archived" }
-        if destinationExists { return "Already on shared drive" }
+        if destinationExists { return "Replace local copy with shortcut" }
         return "Ready to archive"
     }
 }

@@ -1,5 +1,6 @@
 import re
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -131,12 +132,24 @@ class ArchiveService:
         destination = year_destination / event_folder.name
         year_destination.mkdir(parents=True, exist_ok=True)
 
-        if destination.exists():
+        if destination.exists() or destination.is_symlink():
+            if not destination.is_dir() or destination.is_symlink():
+                raise ValueError("The shared-drive destination must be a real event folder.")
+            if destination.resolve() == event_folder.resolve() or destination.resolve().is_relative_to(event_folder.resolve()):
+                raise ValueError("The archive destination overlaps the local event folder.")
+            with tempfile.TemporaryDirectory(prefix=".archive-", dir=event_folder.parent) as staging:
+                backup = Path(staging) / event_folder.name
+                event_folder.rename(backup)
+                try:
+                    event_folder.symlink_to(destination.resolve(), target_is_directory=True)
+                except Exception:
+                    backup.rename(event_folder)
+                    raise
             return ArchiveEventResult(
                 source=event_folder,
                 destination=destination,
-                status="skipped",
-                message="Already exists in Google Drive; no overwrite.",
+                status="moved",
+                message="Replaced local copy with a shortcut to the existing shared-drive folder.",
             )
 
         moved_path = Path(shutil.move(str(event_folder), str(year_destination)))
@@ -153,6 +166,36 @@ class ArchiveService:
             status="moved",
             message="Moved to Google Drive and left a shortcut.",
         )
+
+    def download_event(self, event_folder: Path, local_root: Path, archive_root: Path) -> Path:
+        """Copy a Drive event locally, replacing a shortcut only after copying succeeds."""
+        source = event_folder.resolve(strict=True)
+        archive = archive_root.resolve(strict=True)
+        if not source.is_dir() or not EVENT_FOLDER_PATTERN.match(source.name):
+            raise ValueError("Choose a date-named event folder on the shared drive.")
+        relative = source.relative_to(archive)
+        if len(relative.parts) != 2:
+            raise ValueError("Choose an event inside a year folder on the shared drive.")
+        local = local_root.resolve()
+        if local == archive or local.is_relative_to(archive) or archive.is_relative_to(local):
+            raise ValueError("Local Events and shared-drive Events must be separate folders.")
+        destination = local / relative
+        if destination.exists() and not destination.is_symlink():
+            raise FileExistsError("A local event folder already exists; it will not be overwritten.")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".download-", dir=destination.parent) as staging:
+            copied = Path(staging) / source.name
+            shutil.copytree(source, copied)
+            backup = Path(staging) / "shortcut"
+            if destination.is_symlink():
+                destination.rename(backup)
+            try:
+                copied.rename(destination)
+            except Exception:
+                if backup.is_symlink():
+                    backup.rename(destination)
+                raise
+        return destination
 
     def _event_folders(self, source_root: Path) -> list[tuple[Path, str]]:
         event_folders: list[tuple[Path, str]] = []

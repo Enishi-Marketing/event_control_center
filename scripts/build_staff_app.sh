@@ -17,8 +17,9 @@ if ! "$PYTHON_BIN" -c 'import cv2, googleapiclient, imageio_ffmpeg, numpy, PIL, 
   exit 1
 fi
 if [ ! -f assets/templates/Blank_Lightroom/Blank_Lightroom.lrcat ] ||
-   [ ! -f assets/templates/Blank_Premiere_Project.prproj ]; then
-  echo "Bundled Lightroom or Premiere template is missing from assets/templates."
+   [ ! -f assets/templates/Blank_Premiere_Project.prproj ] ||
+   [ ! -f assets/templates/Blank_Filmcraft.fcproj ]; then
+  echo "Bundled Lightroom, Premiere, or Filmcraft template is missing from assets/templates."
   exit 1
 fi
 

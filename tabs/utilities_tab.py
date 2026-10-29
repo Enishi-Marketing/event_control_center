@@ -220,6 +220,13 @@ class UtilitiesTab(ttk.Frame):
             command=self._browse_archive_drive_root,
         ).grid(row=1, column=1, sticky="e", padx=(12, 0), pady=(8, 0))
 
+        self.download_event_button = ttk.Button(
+            archive_frame,
+            text="Browse Event Folder to Download...",
+            command=self._browse_download_event,
+        )
+        self.download_event_button.grid(row=5, column=0, columnspan=2, sticky="w", pady=(12, 0))
+
         list_frame = ttk.Frame(archive_frame)
         list_frame.grid(row=2, column=0, columnspan=2, sticky="nsew", pady=(12, 0))
         list_frame.columnconfigure(0, weight=1)
@@ -507,6 +514,32 @@ class UtilitiesTab(ttk.Frame):
         except Exception as exc:
             self.worker_queue.put(("counts_error", str(exc)))
 
+    def _browse_download_event(self) -> None:
+        source_root = self._selected_archive_source_root()
+        archive_root = self._selected_archive_drive_root()
+        if source_root is None or archive_root is None:
+            return
+        selected = filedialog.askdirectory(title="Choose Shared Drive Event to Download", initialdir=str(archive_root))
+        if not selected:
+            return
+        self._set_busy(True)
+        self.cancel_button.configure(state="disabled")
+        self.archive_status_var.set("Downloading event to Local Events...")
+        self.archive_progress_bar.start(12)
+        self.worker_thread = threading.Thread(
+            target=self._download_event_worker,
+            args=(Path(selected), source_root, archive_root),
+            daemon=True,
+        )
+        self.worker_thread.start()
+
+    def _download_event_worker(self, event_folder: Path, source_root: Path, archive_root: Path) -> None:
+        try:
+            destination = self.archive_service.download_event(event_folder, source_root, archive_root)
+            self.worker_queue.put(("download_success", destination))
+        except Exception as exc:
+            self.worker_queue.put(("download_error", str(exc)))
+
     def _start_archive_events(self) -> None:
         source_root = self._selected_archive_source_root()
         archive_root = self._selected_archive_drive_root()
@@ -527,7 +560,8 @@ class UtilitiesTab(ttk.Frame):
         if not messagebox.askyesno(
             "Archive Selected Events",
             "This will move the selected local event folders to Google Drive and "
-            "leave shortcuts in their original locations. Continue?",
+            "leave shortcuts in their original locations. If an event already exists on Drive, "
+            "its local copy is removed without copying local changes to Drive. Continue?",
             default=messagebox.NO,
         ):
             return
@@ -627,6 +661,17 @@ class UtilitiesTab(ttk.Frame):
             self.counts_status_var.set("Metadata count update failed.")
             self._set_status("Metadata count update failed.")
             messagebox.showerror("Metadata Count Update Failed", str(payload))
+        elif message in ("download_success", "download_error"):
+            self._set_busy(False)
+            self.archive_progress_bar.stop()
+            if message == "download_success":
+                self._load_archive_candidates(show_errors=False)
+                self.archive_status_var.set(f"Downloaded to {payload}")
+                self._set_status("Event download complete.")
+                messagebox.showinfo("Download Complete", f"Event copied to:\n{payload}")
+            else:
+                self.archive_status_var.set("Download failed.")
+                messagebox.showerror("Download Failed", str(payload))
         elif message == "archive_success" and isinstance(payload, ArchiveRunResult):
             self._set_busy(False)
             self.archive_progress_bar.stop()
@@ -761,7 +806,7 @@ class UtilitiesTab(ttk.Frame):
     def _show_archive_result(self, result: ArchiveRunResult) -> None:
         summary = (
             f"Selected: {result.selected}  "
-            f"Moved: {result.moved}  "
+            f"Archived: {result.moved}  "
             f"Skipped: {result.skipped}  "
             f"Failed: {result.failed}"
         )
@@ -779,7 +824,7 @@ class UtilitiesTab(ttk.Frame):
             messagebox.showwarning(
                 "Archive Finished With Errors",
                 "Archive finished with errors.\n"
-                f"Moved:\n{result.moved}\n"
+                f"Archived:\n{result.moved}\n"
                 f"Skipped:\n{result.skipped}\n"
                 f"Failed:\n{result.failed}"
                 f"{detail_text}",
@@ -789,7 +834,7 @@ class UtilitiesTab(ttk.Frame):
         messagebox.showinfo(
             "Archive Complete",
             "Archive complete.\n"
-            f"Moved:\n{result.moved}\n"
+            f"Archived:\n{result.moved}\n"
             f"Skipped:\n{result.skipped}"
             f"{detail_text}",
         )
@@ -860,7 +905,7 @@ class UtilitiesTab(ttk.Frame):
                     source_root,
                     archive_root,
                 )
-                if not candidate.already_archived and not candidate.destination_exists
+                if not candidate.already_archived
             ]
         except Exception as exc:
             self.archive_status_var.set("Could not scan local events.")
@@ -970,6 +1015,7 @@ class UtilitiesTab(ttk.Frame):
         self.sync_sheets_button.configure(state=sheets_state)
         self.update_counts_button.configure(state=counts_state)
         self.archive_events_button.configure(state=archive_state)
+        self.download_event_button.configure(state="disabled" if self.worker_thread is not None and self.worker_thread.is_alive() else "normal")
 
     def _set_busy(self, busy: bool) -> None:
         state = "disabled" if busy else "normal"
@@ -980,6 +1026,7 @@ class UtilitiesTab(ttk.Frame):
         self.sync_sheets_button.configure(state=state)
         self.update_counts_button.configure(state=state)
         self.archive_events_button.configure(state=state)
+        self.download_event_button.configure(state=state)
         self.cancel_button.configure(state="normal" if busy else "disabled")
         if not busy:
             self._refresh_button_state()

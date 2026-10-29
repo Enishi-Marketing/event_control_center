@@ -491,6 +491,16 @@ final class AppState: ObservableObject {
         return result?.candidates
     }
 
+    func downloadEvent(eventFolder: String, sourceRoot: String, archiveRoot: String) async -> String? {
+        struct Payload: Codable { let eventFolder: String; let sourceRoot: String; let archiveRoot: String }
+        struct Result: Codable { let destination: String }
+        var result: Result?
+        await perform(showSuccess: false) {
+            result = try await self.request("download_event", payload: Payload(eventFolder: eventFolder, sourceRoot: sourceRoot, archiveRoot: archiveRoot))
+        }
+        return result?.destination
+    }
+
     func archiveEvents(sourceRoot: String, archiveRoot: String, eventFolders: [String]) async -> ArchiveRunResult? {
         struct Payload: Codable { let sourceRoot: String; let archiveRoot: String; let eventFolders: [String] }
         var result: ArchiveRunResult?

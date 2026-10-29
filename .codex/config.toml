@@ -1,0 +1,22 @@
+# ECC only: terminal GitHub access with workspace and approval protections.
+# See docs/RELEASING.md. App/session/managed overrides still take precedence.
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+approvals_reviewer = "auto_review"
+
+[sandbox_workspace_write]
+network_access = true
+
+# Limit routine terminal networking to GitHub rather than all internet hosts.
+# Extra dependency hosts require an explicit permission/config decision.
+[features.network_proxy]
+enabled = true
+
+[features.network_proxy.domains]
+"github.com" = "allow"
+"api.github.com" = "allow"
+"uploads.github.com" = "allow"
+"objects.githubusercontent.com" = "allow"
+"release-assets.githubusercontent.com" = "allow"
+"raw.githubusercontent.com" = "allow"
+"codeload.github.com" = "allow"

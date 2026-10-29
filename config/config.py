@@ -110,6 +110,8 @@ class AppConfig:
     BUNDLED_TEMPLATE_ROOT = PROJECT_ROOT / ("templates" if getattr(sys, "frozen", False) else "assets/templates")
     BUNDLED_LIGHTROOM_TEMPLATE_DIR = BUNDLED_TEMPLATE_ROOT / "Blank_Lightroom"
     BUNDLED_PREMIERE_TEMPLATE = BUNDLED_TEMPLATE_ROOT / "Blank_Premiere_Project.prproj"
+    BUNDLED_FILMCRAFT_TEMPLATE = BUNDLED_TEMPLATE_ROOT / "Blank_Filmcraft.fcproj"
+    FILMCRAFT_TEMPLATE = BUNDLED_FILMCRAFT_TEMPLATE
     LOCAL_SETTINGS_PATH = _local_settings_path(APP_NAME)
     _load_local_settings(LOCAL_SETTINGS_PATH)
     # Staff choose a shared-drive folder on first launch; never bake in a

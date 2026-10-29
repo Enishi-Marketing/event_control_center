@@ -15,20 +15,24 @@ class ProjectCreationSummary:
     premiere_created: bool = False
     premiere_skipped: bool = False
     failures: list[str] = field(default_factory=list)
+    filmcraft_created: bool = False
+    filmcraft_skipped: bool = False
 
 
 class ProjectService:
-    """Creates Lightroom and Premiere projects from local blank templates."""
+    """Creates Lightroom, Premiere, and Filmcraft projects from blank templates."""
 
     def __init__(
         self,
         lightroom_template_dir: Path | None = None,
         premiere_template: Path | None = None,
+        filmcraft_template: Path | None = None,
     ) -> None:
         self.lightroom_template_dir = (
             lightroom_template_dir or AppConfig.LIGHTROOM_TEMPLATE_DIR
         )
         self.premiere_template = premiere_template or AppConfig.PREMIERE_TEMPLATE
+        self.filmcraft_template = filmcraft_template or AppConfig.FILMCRAFT_TEMPLATE
 
     def create_projects(
         self,
@@ -55,6 +59,12 @@ class ProjectService:
                 )
             except Exception as exc:
                 summary.failures.append(f"Premiere project: {exc}")
+            try:
+                summary.filmcraft_created, summary.filmcraft_skipped = (
+                    self.create_filmcraft_project(event_folder, clean_name)
+                )
+            except Exception as exc:
+                summary.failures.append(f"Filmcraft project: {exc}")
 
         return summary
 
@@ -96,6 +106,23 @@ class ProjectService:
 
         project_folder.mkdir(parents=True, exist_ok=True)
         shutil.copy2(self.premiere_template, project_file)
+        return True, False
+
+    def create_filmcraft_project(
+        self,
+        event_folder: Path,
+        clean_name: str,
+    ) -> tuple[bool, bool]:
+        if not self.filmcraft_template.exists():
+            raise FileNotFoundError(f"Filmcraft template not found: {self.filmcraft_template}")
+
+        project_folder = event_folder / f"{clean_name} Filmcraft Project"
+        project_file = project_folder / f"{clean_name} Filmcraft Project.fcproj"
+        if project_file.exists():
+            return False, True
+
+        project_folder.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(self.filmcraft_template, project_file)
         return True, False
 
     def _event_name_from_folder(self, event_folder: Path) -> str:

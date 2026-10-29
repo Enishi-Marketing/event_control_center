@@ -543,6 +543,15 @@ def _archive_events(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _download_event(payload: dict[str, Any]) -> dict[str, Any]:
+    destination = ArchiveService().download_event(
+        Path(str(payload["event_folder"])).expanduser(),
+        Path(str(payload["source_root"])).expanduser(),
+        Path(str(payload["archive_root"])).expanduser(),
+    )
+    return {"destination": str(destination)}
+
+
 def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
     commands: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
         "config": lambda _payload: _config(),
@@ -562,6 +571,7 @@ def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         "sync_google_sheets": _sync_google_sheets,
         "archive_candidates": _archive_candidates,
         "archive_events": _archive_events,
+        "download_event": _download_event,
         "save_settings": _save_settings,
         "search_events": _search_events,
         "keyword_vocabulary": lambda _payload: {"entries": [asdict(entry) for entry in _event_keyword_vocabulary().entries]},

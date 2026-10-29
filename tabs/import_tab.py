@@ -1051,6 +1051,11 @@ class ImportTab(ttk.Frame):
             getattr(project_summary, "premiere_skipped", False),
             videos > 0,
         )
+        filmcraft_text = self._project_status_text(
+            getattr(project_summary, "filmcraft_created", False),
+            getattr(project_summary, "filmcraft_skipped", False),
+            videos > 0,
+        )
         title = "Import Cancelled" if cancelled else "Import Complete"
         self._set_status(title)
         self.current_file_var.set(title)
@@ -1072,6 +1077,7 @@ class ImportTab(ttk.Frame):
             f"Unedited JPG Failures:\n{jpg_failed}\n"
             f"Lightroom Project:\n{lightroom_text}\n"
             f"Premiere Project:\n{premiere_text}\n"
+            f"Filmcraft Project:\n{filmcraft_text}\n"
             f"Project Warnings:\n{len(project_failures)}"
             f"{project_warning_text}",
         )

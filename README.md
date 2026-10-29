@@ -89,9 +89,10 @@ first-open instructions](https://support.apple.com/guide/mac-help/open-a-mac-app
 
 On first launch, Settings opens so each person can choose their shared-drive
 Events folder and local Events folder. The school-year folder is created below
-those roots. Blank Lightroom and Premiere projects are included and used
-automatically; the template fields in Settings are optional overrides. Google
-Sheets requires a service-account JSON file and spreadsheet ID; obtain these
+those roots. Blank Lightroom, Premiere, and Filmcraft projects are included and
+used automatically; the Lightroom and Premiere template fields in Settings are
+optional overrides. Google Sheets requires a service-account JSON file and
+spreadsheet ID; obtain these
 through the team's approved credential-sharing
 process. No credentials or personal paths are included in the installer.
 
@@ -192,6 +193,10 @@ python3 create_staff_drive_events.py /path/to/events/2025-26 /path/to/archive/20
 ```
 
 ## Build a staff release without Apple membership
+
+For terminal Git/GitHub operations, source pushes, and staff-update publication,
+follow [the ECC release procedure](docs/RELEASING.md). Source pushes and publishing
+the latest signed staff update are separate actions.
 
 From this Mac, install the build dependencies and create the staff disk image:
 
@@ -324,7 +329,7 @@ python3 main.py
 - SHA-256 verification, progress updates, cancellation, metadata count updates, and append-only import logs
 - Automatic Unedited JPG generation with a gentle brightness lift for dark photos
 - Lightroom catalog creation for photo imports
-- Premiere project creation for video imports
+- Premiere and Filmcraft project creation for video imports, named after the event
 - Event import destination choice: Google Drive or local Events folder
 
 ## Planned Areas

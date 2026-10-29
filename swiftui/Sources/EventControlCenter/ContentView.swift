@@ -891,7 +891,7 @@ struct SearchView: View {
 
 struct UtilitiesView: View {
     private enum FolderPurpose {
-        case event, year, sheets, archiveSource, archiveDrive
+        case event, year, sheets, archiveSource, archiveDrive, downloadEvent
     }
 
     @EnvironmentObject private var app: AppState
@@ -981,6 +981,8 @@ struct UtilitiesView: View {
                 case .archiveSource:
                     archiveSourceRoot = url.path
                     Task { await loadArchiveCandidates() }
+                case .downloadEvent:
+                    Task { await downloadEvent(url.path) }
                 case .archiveDrive:
                     archiveDriveRoot = url.path
                     Task { await loadArchiveCandidates() }
@@ -1001,7 +1003,7 @@ struct UtilitiesView: View {
             Button("Cancel", role: .cancel) {}
             Button("Archive", role: .destructive) { Task { await archiveSelectedEvents() } }
         } message: {
-            Text("This moves \(selectedArchiveCandidates.count) selected local event folder(s) to the shared drive and leaves shortcuts in their original locations.")
+            Text("This moves \(selectedArchiveCandidates.count) selected local event folder(s) to the shared drive and leaves shortcuts in their original locations. If an event already exists on the shared drive, its local copy is removed and replaced with a shortcut; local changes are not copied to the drive.")
         }
         .task { setArchiveDefaults() }
         .onChange(of: app.configuration?.localEventsRoot) { _, _ in setArchiveDefaults() }
@@ -1011,10 +1013,16 @@ struct UtilitiesView: View {
         Card {
             VStack(alignment: .leading, spacing: 14) {
                 Label("Archive local events", systemImage: "archivebox").font(.headline)
-                Text("Move completed local events to the shared drive and leave a shortcut in place. Existing shared-drive folders are excluded.")
+                Text("Move completed local events to the shared drive and leave a shortcut in place. Events already on the shared drive are replaced locally with shortcuts.")
                     .font(.caption).foregroundStyle(.secondary)
                 archiveLocationRow("Local Events", path: archiveSourceRoot, action: { openFolderPicker(.archiveSource) })
                 archiveLocationRow("Shared drive Events", path: archiveDriveRoot, action: { openFolderPicker(.archiveDrive) })
+                HStack {
+                    Button("Browse event folder to download…", systemImage: "arrow.down.circle") { openFolderPicker(.downloadEvent) }
+                        .disabled(archiveSourceRoot.isEmpty || archiveDriveRoot.isEmpty || app.isWorking)
+                    Text("Copies a shared-drive event to Local Events, replacing its shortcut.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 HStack {
                     Text("Available events").font(.subheadline.weight(.medium))
                     Spacer()
@@ -1061,7 +1069,7 @@ struct UtilitiesView: View {
                 }
                 Text(archiveStatus).font(.caption).foregroundStyle(.secondary)
                 if let archiveSummary {
-                    Text("Last archive: \(archiveSummary.moved) moved · \(archiveSummary.skipped) skipped · \(archiveSummary.failed) failed")
+                    Text("Last archive: \(archiveSummary.moved) archived · \(archiveSummary.skipped) skipped · \(archiveSummary.failed) failed")
                         .font(.caption).foregroundStyle(archiveSummary.failed == 0 ? Color.secondary : Color.orange)
                 }
                 HStack {
@@ -1120,13 +1128,24 @@ struct UtilitiesView: View {
         }
     }
 
+    private func downloadEvent(_ folder: String) async {
+        archiveStatus = "Copying event to Local Events…"
+        if let destination = await app.downloadEvent(eventFolder: folder, sourceRoot: archiveSourceRoot, archiveRoot: archiveDriveRoot) {
+            await loadArchiveCandidates()
+            archiveStatus = "Downloaded to \(destination)"
+            app.notice = "Event downloaded to Local Events."
+        } else {
+            archiveStatus = "Download failed. See the error message."
+        }
+    }
+
     private func archiveSelectedEvents() async {
         let folders = archiveCandidates
             .filter { $0.isReadyToArchive && selectedArchiveCandidates.contains($0.id) }
             .map(\.source)
         guard let result = await app.archiveEvents(sourceRoot: archiveSourceRoot, archiveRoot: archiveDriveRoot, eventFolders: folders) else { return }
         archiveSummary = result
-        app.notice = "Archive complete: \(result.moved) moved, \(result.skipped) skipped, \(result.failed) failed."
+        app.notice = "Archive complete: \(result.moved) archived, \(result.skipped) skipped, \(result.failed) failed."
         await loadArchiveCandidates()
     }
 
@@ -1261,7 +1280,7 @@ struct SettingsView: View {
                         Label("Editing project templates", systemImage: "square.on.square").font(.headline)
                         HStack { TextField("Included Lightroom template", text: $lightroomTemplateDir).textFieldStyle(.roundedBorder); Button("Choose folder") { choosingLightroomTemplate = true } }
                         HStack { TextField("Included Premiere template", text: $premiereTemplate).textFieldStyle(.roundedBorder); Button("Choose file") { choosingPremiereTemplate = true } }
-                        Text("Blank Lightroom and Premiere projects are included. Leave these fields empty to use them, or choose your own templates.").font(.caption).foregroundStyle(.secondary)
+                        Text("Blank Lightroom, Premiere, and Filmcraft projects are included. Leave these fields empty to use the included Lightroom and Premiere templates, or choose your own.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 Card {
