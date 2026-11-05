@@ -113,6 +113,33 @@ removable cards still offer optional cleanup after import. The app sends a
 macOS notification when an import finishes; macOS may ask for notification
 permission the first time.
 
+Photo imports accept JPEG (`.jpg`, `.jpeg`), HEIC/HEIF, PNG, WebP, TIFF
+(`.tif`, `.tiff`), GIF, BMP, and camera RAW files (`.cr2`, `.cr3`, `.dng`,
+`.nef`, `.arw`, `.raf`, `.orf`, `.rw2`, `.raw`), including uppercase extensions.
+ECC copies and verifies the original files into `Raw/Photos`. Preview and
+Unedited JPG generation depend on the image decoder; an unsupported camera RAW
+variant can still be imported even if its preview cannot be generated. Animated
+or multipage originals are preserved; browsing previews are still images.
+
+Recognized formats that the converter cannot decode are still copied and verified
+in `Raw/Photos` or `Raw/Videos`. Additional recognized formats include AVIF,
+Photoshop, other camera RAW files, M4V, MKV, WebM, 3GP, MPEG, and WMV.
+The Import page compares source, selected, verified-original, JPG, and smaller-video
+counts. Missing conversions and unimported files produce a visible **Keep the
+source** warning and a detailed report under `Data/Import Checks`. Unknown files
+stay on the source and are listed in the report. Finder bookkeeping is excluded.
+Card cleanup is offered only after the complete count check passes; immediately
+before deletion ECC re-verifies every source/archive pair with SHA-256 and checks
+that the conversion copies still exist. A failed preflight check deletes nothing.
+
+ECC also populates a FilmCraft media library, attaches verified Smaller Videos as
+proxies, and creates **YouTube - 16x9**, **Vertical - 9x16**, and **Square - 1x1**
+chronological assemblies. Photos last three seconds, and all media fits without
+cropping or upscaling. Utilities has **Prepare / repair FilmCraft** for existing
+events. Edited timelines and working projects are preserved in refreshed
+assemblies. See [FilmCraft preparation](docs/FILMCRAFT.md) for portability,
+photo intermediates, runtime setup, and supported failure handling.
+
 Click a keyword chip to remove it from an event before saving.
 The **Keyword bank** below the keyword field lets you add saved keywords with a
 click. It puts the most-used keywords first, breaks ties by recency and name,
@@ -125,7 +152,7 @@ ECC moves an earlier top-level `Smaller Videos` or `Social Videos` folder into
 Video imports automatically create compressed H.264/AAC MP4 copies there using
 the bundled encoder. Existing 1080p and smaller dimensions are kept; only larger
 clips are resized to fit 1920×1080 landscape or 1080×1920 portrait. Video bitrate
-is capped at about 5 Mbps, plus 128 kbps audio: roughly 40 MB per minute or less,
+is capped at about 5 Mbps, plus 128 kbps per audio stream: roughly 40 MB per minute for a typical single-audio-stream clip,
 depending on the footage. Aspect ratio and orientation are preserved. Original
 videos stay in `Raw/Videos`. Conversion issues appear in the import results and
 `Data/import.log`, and successfully verified originals remain imported. Existing
@@ -157,6 +184,7 @@ Install the project requirements before launching:
 
 ```bash
 .venv/bin/python -m pip install --upgrade -r requirements.txt
+.venv/bin/python scripts/prepare_filmcraft_tool.py
 ```
 
 The Swift package targets macOS 14 or later.

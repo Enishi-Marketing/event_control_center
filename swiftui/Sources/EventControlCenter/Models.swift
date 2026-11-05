@@ -207,6 +207,7 @@ struct MediaScan: Codable {
     let skippedCount: Int
     let failures: [String]
     let sessions: [MediaSessionInfo]
+    let otherFiles: [String]?
 }
 
 struct ImportSourceInfo: Codable, Identifiable, Hashable {
@@ -241,6 +242,47 @@ struct ImportOutcome: Codable {
     let socialVideosFailed: Int
     let failures: [String]
     let importedSources: [String]
+    let check: ImportCheck?
+    let filmcraft: FilmcraftResult?
+}
+
+struct FilmcraftResult: Codable {
+    let projectPath: String
+    let videos: Int
+    let photos: Int
+    let proxiesLinked: Int
+    let proxyProblems: [String]
+    let timelinesCreated: Int
+    let timelinesUpdated: Int
+    let intermediatePhotos: Int
+    let failures: [String]
+    let warnings: [String]
+    let unchanged: Bool
+}
+
+struct FilmcraftStreamEvent: Codable {
+    let type: String
+    let current: Int?
+    let total: Int?
+    let message: String?
+    let result: FilmcraftResult?
+    let error: String?
+}
+
+struct ImportCheck: Codable {
+    let sourceFileCount: Int
+    let sourcePhotoCount: Int
+    let sourceVideoCount: Int
+    let selectedCount: Int
+    let verifiedOriginalCount: Int
+    let unimportedCount: Int
+    let rawPhotoCount: Int
+    let rawVideoCount: Int
+    let jpgCount: Int
+    let smallerVideoCount: Int
+    let warnings: [String]
+    let cleanupAllowed: Bool
+    let reportPath: String
 }
 
 struct ImportStreamEvent: Codable {
@@ -262,6 +304,7 @@ struct ImportStreamEvent: Codable {
 struct SourceCleanupPayload: Codable {
     let source: String
     let files: [String]
+    let importReceipt: String
 }
 
 struct SourceCleanupResult: Codable {

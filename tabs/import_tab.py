@@ -10,6 +10,7 @@ from tkinter import filedialog, messagebox, ttk
 from config.config import AppConfig
 from services.drive_detector import DriveDetector, ImportSource
 from services.folder_service import EventFolderResult, FolderService
+from services.filmcraft_service import FilmcraftService, FilmcraftSummary
 from services.importer import (
     ImportProgress,
     ImportService,
@@ -17,6 +18,7 @@ from services.importer import (
     MediaScanResult,
     MediaSession,
 )
+from services.import_check_service import ImportCheckService
 from services.keyword_service import KeywordVocabulary, keyword_key
 from services.metadata_service import MetadataService
 from services.project_service import ProjectCreationSummary, ProjectService
@@ -698,6 +700,7 @@ class ImportTab(ttk.Frame):
             f"Capture Time: {time_text}"
             f"{failure_text}"
             f"{preview_text}"
+            + (f"\nUnrecognized files left on source: {len(result.other_files)}. Keep the source." if result.other_files else "")
         )
         self._render_selection_controls(result)
         self._set_status(
@@ -875,14 +878,25 @@ class ImportTab(ttk.Frame):
                     has_videos=summary.videos_imported > 0,
                 )
             self.worker_queue.put(
-                ("import_success", (summary, jpg_summary, project_summary, source))
+                ("stage_progress", "Checking original and conversion counts...")
+            )
+            filmcraft = FilmcraftService().prepare(
+                event_folder, self.project_service.filmcraft_project_path(event_folder, self.event_name_var.get()),
+                newly_created=project_summary.filmcraft_created,
+                progress_callback=lambda p: self.worker_queue.put(("stage_progress", p.message)),
+            ) if not summary.cancelled and summary.imported_sources else FilmcraftSummary()
+            if self.scan_result is not None:
+                ImportCheckService().finalize(self.scan_result, len(files), summary, jpg_summary, event_folder,
+                                             project_summary.failures + filmcraft.failures + filmcraft.proxy_problems)
+            self.worker_queue.put(
+                ("import_success", (summary, jpg_summary, project_summary, source, filmcraft))
             )
         except Exception as exc:
             self.worker_queue.put(("import_error", str(exc)))
 
-    def _source_cleanup_worker(self, files: list[Path], source: Path) -> None:
+    def _source_cleanup_worker(self, files: list[Path], source: Path, receipt: Path) -> None:
         try:
-            result = self.source_cleanup_service.cleanup_imported_files(files, source)
+            result = self.source_cleanup_service.cleanup_imported_files(files, source, receipt)
             self.worker_queue.put(("source_cleanup_success", result))
         except Exception as exc:
             self.worker_queue.put(("source_cleanup_error", str(exc)))
@@ -1014,6 +1028,7 @@ class ImportTab(ttk.Frame):
         import_summary = summary
         jpg_summary = UneditedJpgSummary()
         project_summary = ProjectCreationSummary()
+        filmcraft = FilmcraftSummary()
         source = self._selected_source_path()
         if isinstance(summary, tuple):
             if len(summary) == 2:
@@ -1022,6 +1037,8 @@ class ImportTab(ttk.Frame):
                 import_summary, jpg_summary, project_summary = summary
             elif len(summary) == 4:
                 import_summary, jpg_summary, project_summary, source = summary
+            elif len(summary) == 5:
+                import_summary, jpg_summary, project_summary, source, filmcraft = summary
 
         photos = getattr(import_summary, "photos_imported", 0)
         videos = getattr(import_summary, "videos_imported", 0)
@@ -1032,7 +1049,16 @@ class ImportTab(ttk.Frame):
         jpg_skipped = getattr(jpg_summary, "skipped", 0)
         jpg_failed = getattr(jpg_summary, "failed", 0)
         project_failures = getattr(project_summary, "failures", [])
-        import_failures = getattr(import_summary, "failures", [])
+        import_failures = getattr(import_summary, "failures", []) + getattr(jpg_summary, "failures", []) + filmcraft.failures + filmcraft.proxy_problems
+        check = getattr(import_summary, "check", None) or {}
+        count_text = (
+            f"\nCount check: {check.get('verified_original_count', 0)} of {check.get('selected_count', 0)} selected originals verified.\n"
+            f"Source files: {check.get('source_file_count', 0)}; not imported: {check.get('unimported_count', 0)}\n"
+            f"Archive photos/JPGs: {check.get('raw_photo_count', 0)}/{check.get('jpg_count', 0)}\n"
+            f"Archive videos/smaller copies: {check.get('raw_video_count', 0)}/{check.get('smaller_video_count', 0)}\n"
+            + "\n".join(check.get("warnings", []))
+            + f"\nFull report: {check.get('report_path', 'Unavailable; keep the source')}\n"
+        )
         import_warning_text = "\n".join(str(failure) for failure in import_failures[:5])
         if import_warning_text:
             import_warning_text += "\n"
@@ -1062,7 +1088,8 @@ class ImportTab(ttk.Frame):
         self.current_file_detail_var.set("")
         self.transfer_speed_var.set("")
         self.file_progress_bar.configure(value=0, maximum=100)
-        messagebox.showinfo(
+        show_result = messagebox.showwarning if check.get("warnings") or import_failures else messagebox.showinfo
+        show_result(
             title,
             f"{title}\n"
             f"Photos Imported:\n{photos}\n"
@@ -1078,8 +1105,12 @@ class ImportTab(ttk.Frame):
             f"Lightroom Project:\n{lightroom_text}\n"
             f"Premiere Project:\n{premiere_text}\n"
             f"Filmcraft Project:\n{filmcraft_text}\n"
+            f"FilmCraft library: {filmcraft.videos} videos, {filmcraft.photos} photos\n"
+            f"Proxies linked: {filmcraft.proxies_linked}; problems: {len(filmcraft.proxy_problems)}\n"
+            f"Timelines created/updated: {filmcraft.timelines_created}/{filmcraft.timelines_updated}\n"
+            f"Prepared project: {filmcraft.project_path}\n"
             f"Project Warnings:\n{len(project_failures)}"
-            f"{project_warning_text}",
+            f"{project_warning_text}\n{count_text}",
         )
         self._prompt_source_cleanup(import_summary, source)
 
@@ -1094,6 +1125,11 @@ class ImportTab(ttk.Frame):
         cancelled = getattr(import_summary, "cancelled", False)
         imported_sources = list(getattr(import_summary, "imported_sources", []))
         if cancelled or not imported_sources:
+            return
+        check = getattr(import_summary, "check", None)
+        if not check or not check.get("cleanup_allowed"):
+            return
+        if self.source_cleanup_service.ejectable_mount(source) is None:
             return
 
         failed = getattr(import_summary, "failed", 0)
@@ -1122,7 +1158,7 @@ class ImportTab(ttk.Frame):
 
         thread = threading.Thread(
             target=self._source_cleanup_worker,
-            args=(imported_sources, source),
+            args=(imported_sources, source, Path(check["report_path"])),
             daemon=True,
         )
         self.worker_thread = thread

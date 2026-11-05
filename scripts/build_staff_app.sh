@@ -36,6 +36,7 @@ fi
 UPDATE_FEED_URL="https://github.com/$RELEASE_REPOSITORY/releases/latest/download/appcast.xml"
 
 export PYINSTALLER_CONFIG_DIR="${PYINSTALLER_CONFIG_DIR:-$PWD/.pyinstaller}"
+"$PYTHON_BIN" scripts/prepare_filmcraft_tool.py
 "$PYTHON_BIN" -m PyInstaller EventControlBackend.spec --noconfirm --clean
 SWIFT_BUILD_ARGS=(--package-path swiftui --configuration release --scratch-path "$PWD/build/swift")
 if [ -n "${ECC_SWIFT_SDK:-}" ]; then

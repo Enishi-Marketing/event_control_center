@@ -105,6 +105,8 @@ struct ImportView: View {
     @State private var importProgress: ImportStreamEvent?
     @State private var importStartedAt: Date?
     @State private var pendingSourceCleanup: ImportOutcome?
+    @State private var lastImportCheck: ImportCheck?
+    @State private var lastFilmcraftResult: FilmcraftResult?
     @State private var isCleaningUpSource = false
     @State private var cardSafetyMessage: String?
     @State private var cardIsSafeToRemove = false
@@ -128,6 +130,27 @@ struct ImportView: View {
                 sourceCard
                 if isScanning { MediaScanProgressPanel() }
                 if let scan { scanCard(scan) }
+                if let check = lastImportCheck {
+                    Card {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(check.warnings.isEmpty ? "Import count check passed" : "Import needs attention — keep the source",
+                                  systemImage: check.warnings.isEmpty ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
+                                .foregroundStyle(check.warnings.isEmpty ? Color.green : Color.orange)
+                            Text("Source: \(check.sourcePhotoCount) photos, \(check.sourceVideoCount) videos · \(check.sourceFileCount) files total")
+                            Text("Verified this import: \(check.verifiedOriginalCount) of \(check.selectedCount) selected · \(check.unimportedCount) source files not imported")
+                            Text("Event archive: \(check.rawPhotoCount) photos / \(check.jpgCount) JPG copies · \(check.rawVideoCount) videos / \(check.smallerVideoCount) smaller copies")
+                            ForEach(check.warnings, id: \.self) { warning in
+                                Text(warning).font(.callout).foregroundStyle(.orange)
+                            }
+                            Button("Open full count report") {
+                                NSWorkspace.shared.open(URL(fileURLWithPath: check.reportPath))
+                            }
+                        }
+                    }
+                }
+                if let result = lastFilmcraftResult {
+                    Card { FilmcraftResultPanel(result: result) }
+                }
                 if let folder = currentFolder {
                     Label("Event folder ready: \(folder)", systemImage: "checkmark.circle.fill")
                         .font(.subheadline).foregroundStyle(.green)
@@ -169,7 +192,13 @@ struct ImportView: View {
         .onChange(of: sourcePath) { _, path in
             if !path.isEmpty && !isCleaningUpSource {
                 clearCardSafetyStatus()
+                if !isImporting { lastImportCheck = nil; lastFilmcraftResult = nil }
             }
+        }
+        .onChange(of: currentFolder) { _, _ in
+            lastImportCheck = nil
+            lastFilmcraftResult = nil
+            pendingSourceCleanup = nil
         }
         .onChange(of: destination) { old, new in
             currentFolder = nil
@@ -316,7 +345,7 @@ struct ImportView: View {
                 }
                 if !sourcePath.isEmpty {
                     Text(sourceIsRemovable
-                        ? "Removable card: cleanup and eject will be offered after import."
+                        ? "Removable card: cleanup is offered only after every source file is accounted for and conversions pass."
                         : "Media folder: original files will stay in place after import.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -358,6 +387,14 @@ struct ImportView: View {
                         .disabled(isImporting)
                     Text("Previews show the selected lift. New unedited JPGs use it when imported.")
                         .font(.caption).foregroundStyle(.secondary)
+                }
+                if let otherFiles = scan.otherFiles, !otherFiles.isEmpty {
+                    Text("\(otherFiles.count) unrecognized file(s) will stay on the source. Cleanup will be disabled; review the full count report after import.")
+                        .font(.callout).foregroundStyle(.orange)
+                }
+                if !scan.failures.isEmpty {
+                    Text("\(scan.failures.count) source read issue(s). Keep the source; the scan may be incomplete.")
+                        .font(.callout).foregroundStyle(.orange)
                 }
                 ForEach(scan.sessions) { session in
                     SessionRow(session: session, selectedSessions: $selectedSessions, brightness: jpgBrightness)
@@ -468,6 +505,9 @@ struct ImportView: View {
         let importedFromRemovableCard = sourceIsRemovable
         let payload = ImportMediaPayload(source: sourcePath, eventFolder: currentFolder, sessionGapMinutes: sessionGap, sessionIndexes: selectedSessions.sorted(), eventName: eventName, brightness: Int(jpgBrightness))
         isImporting = true
+        lastImportCheck = nil
+        lastFilmcraftResult = nil
+        pendingSourceCleanup = nil
         importStartedAt = Date()
         importProgress = ImportStreamEvent(
             type: "progress",
@@ -489,17 +529,21 @@ struct ImportView: View {
             importProgress = event
         }) {
             app.notice = "Imported \(outcome.photosImported) photos and \(outcome.videosImported) videos. Generated \(outcome.jpgsGenerated) JPGs and \(outcome.socialVideosGenerated) smaller video copies."
-            if !outcome.failures.isEmpty {
-                app.errorMessage = "Import finished with issues:\n\n" + outcome.failures.prefix(5).joined(separator: "\n")
+            lastImportCheck = outcome.check
+            lastFilmcraftResult = outcome.filmcraft
+            let warnings = (outcome.check?.warnings ?? []) + outcome.failures
+            if !warnings.isEmpty {
+                app.errorMessage = "Import finished with issues. Keep the source.\n\n" + warnings.prefix(8).joined(separator: "\n")
             }
             app.notifyImportFinished(eventName: eventName, outcome: outcome)
-            if importedFromRemovableCard && !outcome.importedSources.isEmpty {
+            if importedFromRemovableCard && outcome.check?.cleanupAllowed == true && !outcome.importedSources.isEmpty {
                 pendingSourceCleanup = outcome
             }
         }
     }
 
     private func cleanUpImportedMedia(_ outcome: ImportOutcome) async {
+        guard let check = outcome.check, check.cleanupAllowed else { return }
         isCleaningUpSource = true
         cardSafetyMessage = nil
         cardIsSafeToRemove = false
@@ -511,7 +555,8 @@ struct ImportView: View {
         defer { isCleaningUpSource = false }
         let cleanup = SourceCleanupPayload(
             source: outcome.source,
-            files: outcome.importedSources
+            files: outcome.importedSources,
+            importReceipt: check.reportPath
         )
         if let result = await app.cleanupImportedMedia(cleanup) {
             if result.ejected {
@@ -903,6 +948,9 @@ struct UtilitiesView: View {
     @State private var isCompressingVideos = false
     @State private var videoProgress: SocialVideoStreamEvent?
     @State private var videoSummary: String?
+    @State private var preparingFilmcraft = false
+    @State private var filmcraftProgress: FilmcraftStreamEvent?
+    @State private var filmcraftResult: FilmcraftResult?
     @State private var choosingFolder = false
     @State private var folderPurpose: FolderPurpose = .event
     @State private var yearRoot = ""
@@ -945,6 +993,24 @@ struct UtilitiesView: View {
                     }
                 }
                 staffVideoCard
+                Card {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Label("FilmCraft assemblies", systemImage: "film.stack").font(.headline)
+                        Text(eventFolder.isEmpty ? "Choose an ECC event folder." : eventFolder).lineLimit(2)
+                        Text("Refresh the media library, link existing smaller videos, and prepare three chronological timelines. Edited projects and timelines are preserved in a refreshed project.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            Button("Choose event folder") { openFolderPicker(.event) }.disabled(app.isWorking)
+                            Spacer()
+                            Button("Prepare / repair FilmCraft") { Task { await prepareFilmcraft() } }
+                                .buttonStyle(.borderedProminent).disabled(eventFolder.isEmpty || app.isWorking)
+                        }
+                        if preparingFilmcraft {
+                            ProgressView(filmcraftProgress?.message ?? "Preparing FilmCraft…")
+                        }
+                        if let result = filmcraftResult { FilmcraftResultPanel(result: result) }
+                    }
+                }
                 Card {
                     VStack(alignment: .leading, spacing: 14) {
                         Label("Metadata counts", systemImage: "number.circle").font(.headline)
@@ -1211,6 +1277,13 @@ struct UtilitiesView: View {
         ) {
             app.notice = "JPGs: \(result.generated) generated, \(result.skipped) unchanged, \(result.failed) failed."
         }
+    }
+
+    private func prepareFilmcraft() async {
+        preparingFilmcraft = true
+        filmcraftResult = nil
+        defer { preparingFilmcraft = false }
+        filmcraftResult = await app.prepareFilmcraft(folder: eventFolder) { filmcraftProgress = $0 }
     }
 
     private func refreshCounts() async {

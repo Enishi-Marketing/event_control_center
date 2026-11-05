@@ -120,6 +120,10 @@ struct BackendClient {
         try streamEvents("generate_social_videos_stream", payload: payload)
     }
 
+    func filmcraftEvents<Payload: Encodable>(payload: Payload) throws -> AsyncThrowingStream<FilmcraftStreamEvent, Error> {
+        try streamEvents("prepare_filmcraft_stream", payload: payload)
+    }
+
     private func streamEvents<Payload: Encodable, StreamEvent: Decodable>(
         _ command: String,
         payload: Payload

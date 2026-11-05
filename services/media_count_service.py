@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from services.importer import PHOTO_EXTENSIONS, VIDEO_EXTENSIONS
+from services.importer import PHOTO_EXTENSIONS, VIDEO_EXTENSIONS, is_system_file
 from services.metadata_service import MetadataService
 
 
@@ -119,6 +119,6 @@ class MediaCountService:
 
         count = 0
         for path in folder.rglob("*"):
-            if path.is_file() and path.suffix.casefold() in extensions:
+            if path.is_file() and not is_system_file(path) and path.suffix.casefold() in extensions:
                 count += 1
         return count

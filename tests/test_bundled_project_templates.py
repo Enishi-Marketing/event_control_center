@@ -84,7 +84,7 @@ class BundledProjectTemplateTests(unittest.TestCase):
                     self.assertEqual(result.premiere_created, missing != "Premiere")
                     self.assertEqual(result.filmcraft_created, missing != "Filmcraft")
 
-    def test_photo_only_import_does_not_create_video_projects(self) -> None:
+    def test_photo_only_import_creates_filmcraft_but_not_premiere(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             event = Path(temporary) / "event"
             result = ProjectService(
@@ -93,9 +93,9 @@ class BundledProjectTemplateTests(unittest.TestCase):
             self.assertEqual(result.failures, [])
             self.assertTrue(result.lightroom_created)
             self.assertFalse(result.premiere_created)
-            self.assertFalse(result.filmcraft_created)
+            self.assertTrue(result.filmcraft_created)
             self.assertFalse(result.filmcraft_skipped)
-            self.assertEqual([folder.name for folder in event.iterdir()], ["Event Catalog"])
+            self.assertEqual({folder.name for folder in event.iterdir()}, {"Event Catalog", "Event Filmcraft Project"})
 
     def test_old_default_paths_migrate_to_bundled_templates(self) -> None:
         legacy = Path.home() / "Documents" / "Blank_Lightroom"

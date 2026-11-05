@@ -10,13 +10,16 @@ from pathlib import Path
 from threading import Event
 
 from imageio_ffmpeg import get_ffmpeg_exe
+from services.media_identity import media_identity, same_content
+from services.video_proxy_validation import record_proxy
 
 
 SMALLER_VIDEO_FOLDER = Path("Raw") / "Smaller Videos"
 VIDEO_BITRATE_LIMIT = "5M"
 AUDIO_BITRATE = "128k"
 # The filter is an identity operation for 1080p and smaller clips. FFmpeg
-# applies rotation metadata before scaling, so portrait video stays portrait.
+# preserves the display matrix without baking in rotation; players (including
+# FilmCraft's decoder) apply it, so both originals and proxies stay aligned.
 DOWNLOAD_SCALE = (
     "scale=w='if(gte(iw,ih),min(iw,1920),min(iw,1080))':"
     "h='if(gte(iw,ih),min(ih,1080),min(ih,1920))':"
@@ -63,14 +66,14 @@ class SocialVideoService:
         progress_callback: Callable[[SocialVideoProgress], None] | None = None,
     ) -> SocialVideoSummary:
         # Import here to share the scanner's extension set without a module cycle.
-        from services.importer import VIDEO_EXTENSIONS
+        from services.importer import VIDEO_EXTENSIONS, is_system_file
 
         if not (event_folder / "Raw").is_dir():
             raise ValueError("Choose an event folder containing its Raw folder.")
         self.prepare_folder(event_folder)
         sources = sorted(
             (path for path in (event_folder / "Raw" / "Videos").rglob("*")
-             if path.is_file() and path.suffix.casefold() in VIDEO_EXTENSIONS),
+             if path.is_file() and not is_system_file(path) and path.suffix.casefold() in VIDEO_EXTENSIONS),
             key=lambda path: str(path).casefold(),
         )
         summary = SocialVideoSummary()
@@ -112,16 +115,17 @@ class SocialVideoService:
             return False
         destination_folder = destination.parent
         destination_folder.mkdir(parents=True, exist_ok=True)
+        original_identity = media_identity(source)
 
         with tempfile.TemporaryDirectory(prefix=".social-video-", dir=destination_folder) as workdir:
             staged = Path(workdir) / "output.mp4"
             completed = subprocess.run(
                 [get_ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-nostdin",
-                 "-i", str(source), "-map", "0:v:0", "-map", "0:a:0?",
+                 "-noautorotate", "-i", str(source), "-map", "0:v:0", "-map", "0:a?",
                  "-vf", DOWNLOAD_SCALE, "-c:v", "libx264", "-preset", "medium",
                  "-crf", "23", "-maxrate", VIDEO_BITRATE_LIMIT, "-bufsize", "10M",
-                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", AUDIO_BITRATE,
-                 "-ac", "2", "-movflags", "+faststart", "-map_metadata", "-1", str(staged)],
+                 "-pix_fmt", "yuv420p", "-fps_mode", "passthrough", "-c:a", "aac", "-b:a", AUDIO_BITRATE,
+                 "-movflags", "+faststart", "-map_metadata", "-1", str(staged)],
                 capture_output=True, text=True,
             )
             if completed.returncode:
@@ -129,7 +133,10 @@ class SocialVideoService:
                 raise RuntimeError(detail or "The encoder could not compress this video.")
             if not staged.is_file() or staged.stat().st_size == 0:
                 raise RuntimeError("The video converter did not produce a complete MP4.")
+            if not same_content(original_identity, media_identity(source)):
+                raise RuntimeError("The original video changed during compression; no smaller copy was published.")
             shutil.copystat(source, staged)
+            proxy_identity = media_identity(staged)
             if replace_existing:
                 os.replace(staged, destination)
             else:
@@ -137,4 +144,5 @@ class SocialVideoService:
                     os.link(staged, destination)
                 except FileExistsError:
                     return False
+            record_proxy(event_folder, source, destination, original_identity, proxy_identity)
         return True

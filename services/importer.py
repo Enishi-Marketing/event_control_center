@@ -1,4 +1,5 @@
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -27,11 +28,40 @@ PHOTO_EXTENSIONS = {
     ".raf",
     ".orf",
     ".rw2",
+    ".raw",
     ".jpg",
     ".jpeg",
+    ".heic",
+    ".heif",
+    ".png",
+    ".webp",
+    ".tif",
+    ".tiff",
+    ".gif",
+    ".bmp",
+    ".avif",
+    ".psd",
+    ".psb",
+    ".srw",
+    ".pef",
+    ".nrw",
+    ".crw",
+    ".sr2",
+    ".srf",
+    ".erf",
+    ".3fr",
+    ".fff",
+    ".iiq",
+    ".rwl",
+    ".x3f",
 }
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".mxf", ".avi", ".mts", ".m2ts"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mxf", ".avi", ".mts", ".m2ts", ".m4v", ".mkv", ".webm", ".3gp", ".mpeg", ".mpg", ".wmv"}
 THUMBNAIL_SIZE = 160
+
+
+def is_system_file(path: Path) -> bool:
+    """Finder bookkeeping does not represent unimported user media."""
+    return path.name == ".DS_Store" or path.name.startswith("._")
 
 
 @dataclass(frozen=True)
@@ -92,6 +122,7 @@ class MediaScanResult:
     skipped_count: int = 0
     failures: tuple[str, ...] = ()
     thumbnail_failures: tuple[str, ...] = ()
+    other_files: tuple[Path, ...] = ()
 
     @property
     def photo_count(self) -> int:
@@ -125,6 +156,16 @@ class ImportProgress:
 
 
 @dataclass
+class ImportedFile:
+    """An original whose source and archive copy matched during import."""
+
+    source: Path
+    destination: Path
+    media_type: str
+    capture_time: datetime | None = None
+
+
+@dataclass
 class ImportSummary:
     """Final import outcome."""
 
@@ -137,6 +178,8 @@ class ImportSummary:
     social_videos_failed: int = 0
     imported_sources: list[Path] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
+    imported_files: list[ImportedFile] = field(default_factory=list)
+    check: dict[str, object] | None = None
 
 
 class ImportService:
@@ -155,6 +198,7 @@ class ImportService:
         thumbnail_failures: list[str] = []
         files: list[MediaFile] = []
         skipped_count = 0
+        other_files: list[Path] = []
 
         if not source.exists() or not source.is_dir():
             raise FileNotFoundError(f"Source folder is not available: {source}")
@@ -163,6 +207,8 @@ class ImportService:
             media_type = self._media_type(path)
             if media_type is None:
                 skipped_count += 1
+                if not is_system_file(path):
+                    other_files.append(path)
                 continue
 
             media_file = self._build_media_file(path, media_type, failures)
@@ -179,6 +225,7 @@ class ImportService:
             skipped_count=skipped_count,
             failures=tuple(failures),
             thumbnail_failures=tuple(thumbnail_failures),
+            other_files=tuple(other_files),
         )
 
     def detect_sessions(
@@ -293,6 +340,7 @@ class ImportService:
             else:
                 summary.videos_imported += 1
             summary.imported_sources.append(media_file.path)
+            summary.imported_files.append(ImportedFile(media_file.path, destination, media_file.media_type, media_file.capture_time))
 
             if media_file.media_type == "video" and not cancel_event.is_set():
                 self._emit_progress(
@@ -361,15 +409,22 @@ class ImportService:
 
     def _walk_source(self, source: Path, failures: list[str]) -> list[Path]:
         found: list[Path] = []
-        try:
-            for path in source.rglob("*"):
+        for folder, directories, filenames in os.walk(
+            source, onerror=lambda exc: failures.append(str(exc)), followlinks=False
+        ):
+            for name in directories:
+                path = Path(folder) / name
+                if path.is_symlink():
+                    failures.append(f"{path}: linked folder was not scanned")
+            for name in filenames:
+                path = Path(folder) / name
                 try:
                     if path.is_file():
                         found.append(path)
+                    else:
+                        failures.append(f"{path}: not a readable regular file")
                 except OSError as exc:
                     failures.append(f"{path}: {exc}")
-        except OSError as exc:
-            failures.append(f"{source}: {exc}")
         return found
 
     def _build_media_file(
@@ -392,6 +447,8 @@ class ImportService:
         )
 
     def _media_type(self, path: Path) -> str | None:
+        if is_system_file(path):
+            return None
         suffix = path.suffix.casefold()
         if suffix in PHOTO_EXTENSIONS:
             return "photo"
@@ -519,14 +576,10 @@ class ImportService:
         folder.mkdir(parents=True, exist_ok=True)
         destination = self._unique_destination(folder / destination_name)
 
-        self._copy_with_progress(
-            media_file,
-            destination,
-            current,
-            total,
-            progress_callback,
-        )
         try:
+            self._copy_with_progress(
+                media_file, destination, current, total, progress_callback,
+            )
             self._emit_progress(
                 progress_callback,
                 current,

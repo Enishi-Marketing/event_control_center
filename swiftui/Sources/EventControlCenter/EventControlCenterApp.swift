@@ -193,7 +193,7 @@ final class AppState: ObservableObject {
     }
 
     func notifyImportFinished(eventName: String, outcome: ImportOutcome) {
-        let issueCount = outcome.failures.count
+        let issueCount = outcome.failures.count + (outcome.check?.warnings.count ?? 0)
         let title = issueCount == 0 ? "Import complete" : "Import finished with issues"
         let summary = "\(outcome.photosImported) photos and \(outcome.videosImported) videos imported."
         let issueText = issueCount == 0 ? "" : " \(issueCount) issue(s) need review."
@@ -393,6 +393,29 @@ final class AppState: ObservableObject {
             let config: ConfigSnapshot = try await self.request("hero_save_settings", payload: payload)
             self.configuration = config
             self.notice = "Hero Library locations saved."
+        }
+    }
+
+    func prepareFilmcraft(folder: String, onProgress: @escaping (FilmcraftStreamEvent) -> Void) async -> FilmcraftResult? {
+        struct Payload: Codable { let eventFolder: String }
+        guard let client else {
+            errorMessage = "The Python backend is unavailable."
+            return nil
+        }
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            var result: FilmcraftResult?
+            for try await event in try client.filmcraftEvents(payload: Payload(eventFolder: folder)) {
+                if event.type == "progress" { onProgress(event) }
+                else if event.type == "error" { throw BackendError.failed(event.error ?? "FilmCraft preparation failed.") }
+                else if event.type == "completed" { result = event.result }
+            }
+            guard let result else { throw BackendError.failed("FilmCraft preparation stopped before returning a result.") }
+            return result
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
         }
     }
 

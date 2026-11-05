@@ -59,10 +59,9 @@ class ProjectService:
                 )
             except Exception as exc:
                 summary.failures.append(f"Premiere project: {exc}")
+        if has_photos or has_videos:
             try:
-                summary.filmcraft_created, summary.filmcraft_skipped = (
-                    self.create_filmcraft_project(event_folder, clean_name)
-                )
+                summary.filmcraft_created, summary.filmcraft_skipped = self.create_filmcraft_project(event_folder, clean_name)
             except Exception as exc:
                 summary.failures.append(f"Filmcraft project: {exc}")
 
@@ -116,14 +115,18 @@ class ProjectService:
         if not self.filmcraft_template.exists():
             raise FileNotFoundError(f"Filmcraft template not found: {self.filmcraft_template}")
 
-        project_folder = event_folder / f"{clean_name} Filmcraft Project"
-        project_file = project_folder / f"{clean_name} Filmcraft Project.fcproj"
+        project_file = self.filmcraft_project_path(event_folder, clean_name)
+        project_folder = project_file.parent
         if project_file.exists():
             return False, True
 
         project_folder.mkdir(parents=True, exist_ok=True)
         shutil.copy2(self.filmcraft_template, project_file)
         return True, False
+
+    def filmcraft_project_path(self, event_folder: Path, event_name: str) -> Path:
+        name = self._safe_filename(event_name or self._event_name_from_folder(event_folder))
+        return event_folder / f"{name} Filmcraft Project" / f"{name} Filmcraft Project.fcproj"
 
     def _event_name_from_folder(self, event_folder: Path) -> str:
         folder_name = event_folder.name

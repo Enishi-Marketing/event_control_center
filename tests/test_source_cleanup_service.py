@@ -23,7 +23,7 @@ class SourceCleanupServiceTests(unittest.TestCase):
             self.assertFalse(result.ejected)
             self.assertIn("no files were deleted", result.eject_message)
 
-    def test_cleanup_deletes_only_verified_files_and_ejects_their_source(self):
+    def test_cleanup_without_count_receipt_preserves_every_file(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "card"
@@ -40,11 +40,11 @@ class SourceCleanupServiceTests(unittest.TestCase):
             ):
                 result = service.cleanup_imported_files([verified, outside], source)
 
-            self.assertFalse(verified.exists())
+            self.assertTrue(verified.exists())
             self.assertTrue(outside.exists())
-            self.assertEqual(result.deleted, 1)
-            self.assertTrue(result.ejected)
-            self.assertEqual(result.delete_failures, [f"{outside}: not inside source"])
+            self.assertEqual(result.deleted, 0)
+            self.assertFalse(result.ejected)
+            self.assertIn("count check", result.delete_failures[0])
 
     def test_eject_uses_diskutil_on_macos(self):
         service = SourceCleanupService()

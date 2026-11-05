@@ -9,7 +9,7 @@ from threading import Event
 
 from PIL import Image
 
-from services.importer import PHOTO_EXTENSIONS
+from services.importer import PHOTO_EXTENSIONS, is_system_file
 from services.metadata_service import MetadataService
 from services.photo_brightness import brighten, extra_brightness_amount
 
@@ -111,7 +111,7 @@ class UneditedJpgService:
             (
                 path
                 for path in source_folder.iterdir()
-                if path.is_file() and path.suffix.casefold() in PHOTO_EXTENSIONS
+                if path.is_file() and not is_system_file(path) and path.suffix.casefold() in PHOTO_EXTENSIONS
             ),
             key=lambda path: path.name.casefold(),
         )
@@ -138,7 +138,7 @@ class UneditedJpgService:
                 "--out",
                 str(prepared),
             ]
-            subprocess.run(command, check=True, capture_output=True, text=True)
+            subprocess.run(command, check=True, capture_output=True, text=True, timeout=120)
 
         with Image.open(prepared) as image:
             brightened = brighten(image, brightness)
@@ -182,8 +182,9 @@ class UneditedJpgService:
                 check=True,
                 capture_output=True,
                 text=True,
+                timeout=30,
             )
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             return None
 
         width: int | None = None

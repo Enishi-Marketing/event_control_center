@@ -20,8 +20,10 @@ from config.config import AppConfig
 from services.archive_service import ArchiveService
 from services.drive_detector import DriveDetector
 from services.folder_service import FolderService
+from services.filmcraft_service import FilmcraftProgress, FilmcraftService, FilmcraftSummary
 from services.hero_library_service import HeroLibraryService
 from services.importer import ImportProgress, ImportService, MediaScanResult
+from services.import_check_service import ImportCheckService
 from services.keyword_service import KeywordVocabulary
 from services.media_count_service import MediaCountService
 from services.metadata_service import MetadataService
@@ -92,6 +94,7 @@ def _scan_result(result: MediaScanResult) -> dict[str, Any]:
         "photo_count": result.photo_count,
         "video_count": result.video_count,
         "skipped_count": result.skipped_count,
+        "other_files": [str(path) for path in result.other_files],
         "failures": list(result.failures),
         "sessions": [
             {
@@ -239,7 +242,17 @@ def _import_media(
         event_folder,
         brightness=int(payload.get("brightness", 0)),
     )
+    projects = ProjectService()
+    created = projects.create_projects(event_folder, str(payload.get("event_name", "")), summary.photos_imported > 0, summary.videos_imported > 0)
+    filmcraft = FilmcraftService().prepare(
+        event_folder, projects.filmcraft_project_path(event_folder, str(payload.get("event_name", ""))),
+        newly_created=created.filmcraft_created,
+        progress_callback=(lambda p: progress_callback(ImportProgress(p.current, p.total, message=p.message, phase="Preparing FilmCraft"))) if progress_callback else None,
+    ) if summary.imported_sources else FilmcraftSummary()
+    preparation_failures = created.failures + filmcraft.failures + filmcraft.proxy_problems
+    check = ImportCheckService().finalize(scan, len(selected_files), summary, jpg_summary, event_folder, preparation_failures)
     return {
+        "source": str(source),
         "photos_imported": summary.photos_imported,
         "videos_imported": summary.videos_imported,
         "skipped": summary.skipped,
@@ -247,8 +260,10 @@ def _import_media(
         "jpgs_generated": jpg_summary.generated,
         "social_videos_generated": summary.social_videos_generated,
         "social_videos_failed": summary.social_videos_failed,
-        "failures": summary.failures + jpg_summary.failures,
+        "failures": summary.failures + jpg_summary.failures + preparation_failures,
         "imported_sources": [str(path) for path in summary.imported_sources],
+        "check": check,
+        "filmcraft": asdict(filmcraft),
     }
 
 
@@ -279,7 +294,7 @@ def _stream_import_media(payload: dict[str, Any]) -> None:
 
     import_count = len(selected_files)
     jpeg_estimate = sum(item.media_type == "photo" for item in selected_files)
-    project_estimate = int(jpeg_estimate > 0) + int(
+    project_estimate = 1 + int(jpeg_estimate > 0) + int(
         any(item.media_type == "video" for item in selected_files)
     )
     overall_total = max(import_count + jpeg_estimate + project_estimate, 1)
@@ -346,18 +361,18 @@ def _stream_import_media(payload: dict[str, Any]) -> None:
         )
         has_photos = summary.photos_imported > 0
         has_videos = summary.videos_imported > 0
-        project_estimate = int(has_photos) + int(has_videos)
+        project_estimate = int(has_photos) + int(has_videos) + int(has_photos or has_videos)
         overall_total = max(import_count + jpeg_estimate + project_estimate, 1)
         jpg_summary = jpg_service.generate_for_event(
             event_folder,
             progress_callback=jpg_progress_callback,
             brightness=int(payload.get("brightness", 0)),
         )
-        projects_to_create = int(has_photos) + int(has_videos)
+        projects_to_create = project_estimate
         if projects_to_create:
             _emit_stream_event(
                 "progress",
-                message="Creating blank editing project files…",
+                message="Creating editing project files…",
                 phase="Creating projects",
                 overall_completed=import_count + jpeg_estimate,
                 overall_total=overall_total,
@@ -368,6 +383,20 @@ def _stream_import_media(payload: dict[str, Any]) -> None:
             has_photos,
             has_videos,
         )
+        def filmcraft_progress(progress: FilmcraftProgress) -> None:
+            _emit_stream_event(
+                "progress", current=progress.current, total=progress.total,
+                message=progress.message, phase="Preparing FilmCraft",
+                overall_completed=import_count + jpeg_estimate + max(0, project_estimate - 1),
+                overall_total=overall_total,
+            )
+
+        filmcraft = FilmcraftService().prepare(
+            event_folder, ProjectService().filmcraft_project_path(event_folder, str(payload.get("event_name", ""))),
+            newly_created=project_summary.filmcraft_created, progress_callback=filmcraft_progress,
+        ) if has_photos or has_videos else FilmcraftSummary()
+        preparation_failures = project_summary.failures + filmcraft.failures + filmcraft.proxy_problems
+        check = ImportCheckService().finalize(scan, len(selected_files), summary, jpg_summary, event_folder, preparation_failures)
         outcome = {
             # Preserve the source used for this import. The UI continues to
             # monitor mounted media after an import finishes, so its selected
@@ -380,8 +409,10 @@ def _stream_import_media(payload: dict[str, Any]) -> None:
             "jpgs_generated": jpg_summary.generated,
             "social_videos_generated": summary.social_videos_generated,
             "social_videos_failed": summary.social_videos_failed,
-            "failures": summary.failures + jpg_summary.failures + project_summary.failures,
+            "failures": summary.failures + jpg_summary.failures + preparation_failures,
             "imported_sources": [str(path) for path in summary.imported_sources],
+            "check": check,
+            "filmcraft": asdict(filmcraft),
         }
     except Exception as exc:
         _emit_stream_event("error", error=str(exc))
@@ -389,12 +420,33 @@ def _stream_import_media(payload: dict[str, Any]) -> None:
 
     _emit_stream_event(
         "progress",
-        message="Import complete.",
+        message="Import finished with issues. Keep the source." if check["warnings"] else "Import complete.",
         phase="Finishing",
         overall_completed=overall_total,
         overall_total=overall_total,
     )
     _emit_stream_event("completed", outcome=outcome)
+
+
+def _prepare_filmcraft(payload: dict[str, Any], progress: Callable[[FilmcraftProgress], None] | None = None) -> dict[str, Any]:
+    event = Path(str(payload["event_folder"]))
+    if not (event / "Raw").is_dir():
+        raise ValueError("Choose an existing ECC event folder containing Raw.")
+    metadata = event / "Data" / "metadata.json"
+    name = str(json.loads(metadata.read_text()).get("event_name", "")) if metadata.exists() else ""
+    projects = ProjectService()
+    clean_name = projects._safe_filename(name or projects._event_name_from_folder(event))
+    created, _ = projects.create_filmcraft_project(event, clean_name)
+    return asdict(FilmcraftService().prepare(event, projects.filmcraft_project_path(event, clean_name),
+                                           newly_created=created, progress_callback=progress))
+
+
+def _stream_prepare_filmcraft(payload: dict[str, Any]) -> None:
+    try:
+        result = _prepare_filmcraft(payload, lambda p: _emit_stream_event("progress", message=p.message, current=p.current, total=p.total))
+        _emit_stream_event("completed", result=result)
+    except Exception as exc:
+        _emit_stream_event("error", error=str(exc))
 
 
 def _generate_jpgs(payload: dict[str, Any]) -> dict[str, Any]:
@@ -456,6 +508,7 @@ def _cleanup_imported_media(payload: dict[str, Any]) -> dict[str, Any]:
     result = SourceCleanupService().cleanup_imported_files(
         [Path(str(path)) for path in payload.get("files", [])],
         Path(str(payload["source"])),
+        Path(str(payload["import_receipt"])) if payload.get("import_receipt") else None,
     )
     return {
         "deleted": result.deleted,
@@ -566,6 +619,7 @@ def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "import_media": _import_media,
         "generate_jpgs": _generate_jpgs,
+        "prepare_filmcraft": _prepare_filmcraft,
         "cleanup_imported_media": _cleanup_imported_media,
         "update_media_counts": _update_media_counts,
         "sync_google_sheets": _sync_google_sheets,
@@ -665,6 +719,9 @@ def main() -> None:
             return
         if command == "generate_social_videos_stream":
             _stream_generate_social_videos(payload)
+            return
+        if command == "prepare_filmcraft_stream":
+            _stream_prepare_filmcraft(payload)
             return
         data = _dispatch(command, payload)
         print(json.dumps({"ok": True, "data": data}, default=str))

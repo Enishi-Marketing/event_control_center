@@ -22,10 +22,11 @@ hiddenimports = (
 a = Analysis(
     ["main.py"],
     pathex=[],
-    binaries=[(get_ffmpeg_exe(), "imageio_ffmpeg/binaries")],
+    binaries=[(get_ffmpeg_exe(), "imageio_ffmpeg/binaries"), ("build/filmcraft-tool/filmcraft-cli", "filmcraft")],
     datas=[("assets/app_logo.png", "assets"), ("assets/templates", "templates")]
     + collect_data_files("imageio_ffmpeg", excludes=["binaries/ffmpeg-*"])
-    + copy_metadata("imageio-ffmpeg"),
+    + copy_metadata("imageio-ffmpeg")
+    + [(str(path), "filmcraft/licenses") for path in Path("build/filmcraft-tool").iterdir() if path.is_file() and path.name != "filmcraft-cli"],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
