@@ -128,6 +128,11 @@ The Import page compares source, selected, verified-original, JPG, and smaller-v
 counts. Missing conversions and unimported files produce a visible **Keep the
 source** warning and a detailed report under `Data/Import Checks`. Unknown files
 stay on the source and are listed in the report. Finder bookkeeping is excluded.
+Known camera bookkeeping (`NIKON*.DSC`, numeric `M*.CTG` files in
+`CANONMSC`, and `NCFL/NCSORLST.LST`) and `.fseventsd/fseventsd-uuid` are
+excluded from import counts and cleanup blockers, like Finder bookkeeping.
+These files stay on the card; cleanup deletes only verified imported media.
+Other unrecognized files continue to block cleanup for review.
 Card cleanup is offered only after the complete count check passes; immediately
 before deletion ECC re-verifies every source/archive pair with SHA-256 and checks
 that the conversion copies still exist. A failed preflight check deletes nothing.

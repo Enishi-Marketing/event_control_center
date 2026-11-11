@@ -60,8 +60,21 @@ THUMBNAIL_SIZE = 160
 
 
 def is_system_file(path: Path) -> bool:
-    """Finder bookkeeping does not represent unimported user media."""
-    return path.name == ".DS_Store" or path.name.startswith("._")
+    """Known OS and camera bookkeeping is neither media nor a cleanup blocker.
+
+    Match specific sidecars, not entire directories or arbitrary non-media
+    extensions, so unexpected files still receive the source-safety checks.
+    """
+    name = path.name.casefold()
+    parent = path.parent.name.casefold()
+    return (
+        name == ".ds_store"
+        or name.startswith("._")
+        or re.fullmatch(r"nikon[0-9]+\.dsc", name) is not None
+        or (parent == "canonmsc" and re.fullmatch(r"m[0-9]+\.ctg", name) is not None)
+        or (parent == "ncfl" and name == "ncsorlst.lst")
+        or (parent == ".fseventsd" and name == "fseventsd-uuid")
+    )
 
 
 @dataclass(frozen=True)

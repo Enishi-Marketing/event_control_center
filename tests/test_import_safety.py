@@ -166,6 +166,40 @@ class ImportSafetyTests(unittest.TestCase):
         self.assertEqual(result.deleted, 1)
         self.assertTrue((self.source / ".DS_Store").exists())
 
+    def test_camera_bookkeeping_is_not_imported_and_does_not_block_cleanup(self):
+        names = (
+            "NIKON001.DSC", "DCIM/CANONMSC/M3100.CTG",
+            "NCFL/NCSORLST.LST", ".fseventsd/fseventsd-uuid",
+        )
+        for name in names:
+            path = self.source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"camera bookkeeping")
+        scan, summary, check = self.ready(("one.HEIC",))
+        self.assertEqual(len(scan.files), 1)
+        self.assertEqual(scan.other_files, ())
+        self.assertEqual(check["source_file_count"], 1)
+        report = json.loads(Path(check["report_path"]).read_text())
+        self.assertEqual(report["unimported_files"], [])
+        result, _ = self.cleanup(summary, check)
+        self.assertEqual(result.deleted, 1)
+        self.assertTrue(result.ejected)
+        self.assertTrue(all((self.source / name).exists() for name in names))
+
+    def test_bookkeeping_exceptions_do_not_hide_other_files(self):
+        _, summary, check = self.ready(("one.HEIC",))
+        for name in ("DCIM/CANONMSC/photo.JPG", "NCFL/unknown.xyz",
+                     ".fseventsd/video.MOV", "personal.DSC", "notes.CTG"):
+            with self.subTest(name=name):
+                path = self.source / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"keep this file")
+                result, _ = self.cleanup(summary, check)
+                self.assertEqual(result.deleted, 0)
+                self.assertTrue(path.exists())
+                self.assertTrue(all(p.exists() for p in summary.imported_sources))
+                path.unlink()
+
     def test_partial_failed_copy_is_removed_and_source_is_kept(self):
         source = self.source / "broken.HEIC"
         source.write_bytes(b"keep original")
