@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ from pathlib import Path
 from threading import Event
 from unittest.mock import patch
 
+from backend_bridge import _scan_import_selection
 from services.import_check_service import ImportCheckService
 from services.importer import ImportService
 from services.social_video_service import SocialVideoService
@@ -26,24 +28,27 @@ class ImportSafetyTests(unittest.TestCase):
         self.metadata = self.event / "Data" / "metadata.json"
         self.metadata.write_text(json.dumps({"photo_count": 0, "video_count": 0, "description": "Keep this"}))
 
-    def import_files(self, names: tuple[str, ...], selected: int | None = None):
-        for name in names:
-            (self.source / name).write_bytes(b"original " + name.encode())
+    def import_files(self, names: tuple[str, ...], session_index: int | None = None):
+        for index, name in enumerate(names):
+            path = self.source / name
+            path.write_bytes(b"original " + name.encode())
+            capture_time = 1_783_000_000 + index * 3600
+            os.utime(path, (capture_time, capture_time))
         service = ImportService()
         with patch.object(service, "_with_session_thumbnails", side_effect=lambda sessions, failures: sessions):
             scan = service.scan_media(self.source, 20)
-        files = list(scan.files) if selected is None else list(scan.files)[:selected]
+        files = list(scan.files if session_index is None else scan.sessions[session_index].files)
         with patch.object(SocialVideoService, "create_copy", side_effect=RuntimeError("Unsupported codec")):
             summary = service.import_media(files, self.event, self.source, Event())
-        return scan, summary
+        return scan, files, summary
 
     def ready(self, names: tuple[str, ...] = ("one.HEIC", "two.PNG")):
-        scan, summary = self.import_files(names)
+        scan, files, summary = self.import_files(names)
         for record in summary.imported_files:
             output = self.event / "Unedited JPGs" / "Photos" / f"{record.destination.stem}.jpg"
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_bytes(b"JPEG copy")
-        check = ImportCheckService().finalize(scan, len(scan.files), summary, UneditedJpgSummary(), self.event)
+        check = ImportCheckService().finalize(scan, files, summary, UneditedJpgSummary(), self.event)
         self.assertTrue(check["cleanup_allowed"], check["warnings"])
         return scan, summary, check
 
@@ -70,10 +75,10 @@ class ImportSafetyTests(unittest.TestCase):
         self.assertEqual(json.loads(self.metadata.read_text())["description"], "Keep this")
 
     def test_unconvertible_photos_stay_in_raw_and_block_cleanup(self):
-        scan, summary = self.import_files(("photo.PSD", "camera.RAW"))
+        scan, files, summary = self.import_files(("photo.PSD", "camera.RAW"))
         with patch.object(UneditedJpgService, "_create_jpeg", side_effect=RuntimeError("Unsupported image")):
             jpgs = UneditedJpgService().generate_for_event(self.event)
-        check = ImportCheckService().finalize(scan, 2, summary, jpgs, self.event)
+        check = ImportCheckService().finalize(scan, files, summary, jpgs, self.event)
         self.assertEqual((check["raw_photo_count"], check["jpg_count"]), (2, 0))
         self.assertEqual(jpgs.failed, 2)
         report = json.loads(Path(check["report_path"]).read_text())
@@ -86,40 +91,88 @@ class ImportSafetyTests(unittest.TestCase):
             self.assertEqual(item.source.read_bytes(), item.destination.read_bytes())
 
     def test_unconvertible_video_stays_in_raw_and_is_counted(self):
-        scan, summary = self.import_files(("video.WEBM",))
-        check = ImportCheckService().finalize(scan, 1, summary, UneditedJpgSummary(), self.event)
+        scan, files, summary = self.import_files(("video.WEBM",))
+        check = ImportCheckService().finalize(scan, files, summary, UneditedJpgSummary(), self.event)
         self.assertEqual((check["raw_video_count"], check["smaller_video_count"]), (1, 0))
         self.assertFalse(check["cleanup_allowed"])
         self.assertEqual(summary.imported_files[0].destination.parent, self.event / "Raw" / "Videos")
         self.assertTrue(summary.imported_files[0].source.exists())
 
-    def test_unrecognized_files_and_partial_session_selection_are_reported(self):
-        scan, summary = self.import_files(("one.JPG", "two.JPG", "unknown.xyz"), selected=1)
-        check = ImportCheckService().finalize(scan, 1, summary, UneditedJpgSummary(), self.event)
-        self.assertEqual((check["source_file_count"], check["unimported_count"]), (3, 2))
+    def test_unchecked_session_and_older_archive_media_do_not_fail_import_check(self):
+        scan, files, summary = self.import_files(("unchecked.MOV", "selected.JPG"), session_index=1)
+        old_photo = self.event / "Raw" / "Photos" / "Older.PSD"
+        old_photo.write_bytes(b"older photo with no JPG")
+        old_video = self.event / "Raw" / "Videos" / "Older.MOV"
+        old_video.parent.mkdir(parents=True, exist_ok=True)
+        old_video.write_bytes(b"older video with no smaller copy")
+
+        def convert(photo, output, _brightness):
+            self.assertEqual(photo, summary.imported_photos[0])
+            output.write_bytes(b"JPEG copy")
+
+        with patch.object(UneditedJpgService, "_create_jpeg", side_effect=convert):
+            jpgs = UneditedJpgService().generate_for_event(self.event, photos=summary.imported_photos)
+        check = ImportCheckService().finalize(scan, files, summary, jpgs, self.event)
+
+        self.assertEqual(check["warnings"], [])
+        self.assertEqual((check["selected_count"], check["verified_original_count"], check["jpg_count"]), (1, 1, 1))
+        self.assertEqual((check["unselected_count"], check["unimported_count"], check["raw_video_count"]), (1, 0, 0))
         report = json.loads(Path(check["report_path"]).read_text())
-        self.assertIn(str(self.source / "unknown.xyz"), report["unrecognized_files"])
-        self.assertEqual(len(report["unimported_files"]), 2)
-        self.assertFalse(check["cleanup_allowed"])
+        self.assertEqual(report["unselected_files"], [str(self.source / "unchecked.MOV")])
+        self.assertEqual(report["unimported_files"], [])
+        self.assertTrue(check["cleanup_allowed"])
+        result, eject = self.cleanup(summary, check)
+        self.assertEqual(result.deleted, 1)
+        eject.assert_called_once()
+        self.assertFalse(files[0].path.exists())
+        self.assertTrue((self.source / "unchecked.MOV").is_file())
+        self.assertTrue(summary.imported_photos[0].is_file())
+
+    def test_nonmedia_files_are_ignored_before_and_after_verification(self):
+        scan, files, summary = self.import_files(("one.JPG", "unknown.xyz"))
+        jpg = self.event / "Unedited JPGs" / "Photos" / f"{summary.imported_photos[0].stem}.jpg"
+        jpg.parent.mkdir(parents=True)
+        jpg.write_bytes(b"JPEG copy")
+        check = ImportCheckService().finalize(scan, files, summary, UneditedJpgSummary(), self.event)
+        report = json.loads(Path(check["report_path"]).read_text())
+        self.assertEqual(report["unrecognized_files"], [str(self.source / "unknown.xyz")])
+        self.assertEqual(check["source_file_count"], 1)
+        self.assertEqual(check["unimported_count"], 0)
+        self.assertEqual(check["warnings"], [])
+        self.assertTrue(check["cleanup_allowed"])
+        (self.source / "notes.CTG").write_bytes(b"not media")
+        (self.source / "personal.DSC").write_bytes(b"keep")
+        result, _ = self.cleanup(summary, check)
+        self.assertEqual(result.deleted, 1)
+        self.assertCountEqual([p.name for p in self.source.iterdir()], ["unknown.xyz", "notes.CTG", "personal.DSC"])
+
+    def test_rescan_rejects_a_missing_selected_photo_even_if_session_index_is_reused(self):
+        scan, files, _ = self.import_files(("selected.JPG", "later.MOV"), session_index=0)
+        files[0].path.unlink()
+        payload = {"session_indexes": [scan.sessions[0].index], "selected_file_paths": [str(files[0].path)]}
+        with patch.object(ImportService, "_with_session_thumbnails", side_effect=lambda sessions, failures: sessions):
+            with self.assertRaisesRegex(ValueError, "selected sessions changed"):
+                _scan_import_selection(self.source, payload)
 
     def test_scan_read_failures_disable_cleanup_even_with_matching_counts(self):
         scan, summary, _ = self.ready()
         scan = replace(scan, failures=("Unreadable folder",))
-        check = ImportCheckService().finalize(scan, 2, summary, UneditedJpgSummary(), self.event)
+        check = ImportCheckService().finalize(scan, scan.files, summary, UneditedJpgSummary(), self.event)
         self.assertFalse(check["cleanup_allowed"])
         self.assertTrue(any("read issue" in warning for warning in check["warnings"]))
 
     def test_changed_source_during_import_is_counted_and_warned(self):
         scan, summary, _ = self.ready()
         (self.source / "new.HEIC").write_bytes(b"new photo")
-        check = ImportCheckService().finalize(scan, 2, summary, UneditedJpgSummary(), self.event)
-        self.assertEqual((check["source_file_count"], check["unimported_count"]), (3, 1))
+        check = ImportCheckService().finalize(scan, scan.files, summary, UneditedJpgSummary(), self.event)
+        self.assertEqual((check["source_file_count"], check["unimported_count"]), (3, 0))
+        self.assertTrue(any("Photos or videos on the source changed" in warning for warning in check["warnings"]))
         self.assertFalse(check["cleanup_allowed"])
 
     def test_missing_original_warns_even_when_conversion_exists(self):
         scan, summary, _ = self.ready()
         summary.imported_files[0].destination.unlink()
-        check = ImportCheckService().finalize(scan, 2, summary, UneditedJpgSummary(), self.event)
+        check = ImportCheckService().finalize(scan, scan.files, summary, UneditedJpgSummary(), self.event)
         self.assertEqual(check["verified_original_count"], 1)
         self.assertFalse(check["cleanup_allowed"])
 
@@ -186,10 +239,9 @@ class ImportSafetyTests(unittest.TestCase):
         self.assertTrue(result.ejected)
         self.assertTrue(all((self.source / name).exists() for name in names))
 
-    def test_bookkeeping_exceptions_do_not_hide_other_files(self):
+    def test_bookkeeping_directories_do_not_hide_new_media(self):
         _, summary, check = self.ready(("one.HEIC",))
-        for name in ("DCIM/CANONMSC/photo.JPG", "NCFL/unknown.xyz",
-                     ".fseventsd/video.MOV", "personal.DSC", "notes.CTG"):
+        for name in ("DCIM/CANONMSC/photo.JPG", ".fseventsd/video.MOV"):
             with self.subTest(name=name):
                 path = self.source / name
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -204,7 +256,9 @@ class ImportSafetyTests(unittest.TestCase):
         source = self.source / "broken.HEIC"
         source.write_bytes(b"keep original")
         service = ImportService()
-        files = [service._build_media_file(source, "photo", [])]
+        with patch.object(service, "_with_session_thumbnails", side_effect=lambda sessions, failures: sessions):
+            scan = service.scan_media(self.source, 20)
+        files = list(scan.files)
 
         def fail_copy(media, destination, *_args):
             destination.write_bytes(b"partial")
@@ -215,13 +269,17 @@ class ImportSafetyTests(unittest.TestCase):
         self.assertEqual(summary.failed, 1)
         self.assertEqual(list((self.event / "Raw" / "Photos").iterdir()), [])
         self.assertEqual(source.read_bytes(), b"keep original")
+        check = ImportCheckService().finalize(scan, files, summary, UneditedJpgSummary(), self.event)
+        self.assertEqual(check["unimported_count"], 1)
+        self.assertIn("Original count check: 0 of 1 selected files verified.", check["warnings"])
+        self.assertFalse(check["cleanup_allowed"])
 
     def test_converter_timeout_is_reported_without_losing_raw(self):
-        scan, summary = self.import_files(("photo.HEIC",))
+        scan, files, summary = self.import_files(("photo.HEIC",))
         with patch("services.unedited_jpg_service.subprocess.run", side_effect=subprocess.TimeoutExpired("sips", 120)):
             jpgs = UneditedJpgService().generate_for_event(self.event)
         self.assertEqual(jpgs.failed, 1)
-        check = ImportCheckService().finalize(scan, 1, summary, jpgs, self.event)
+        check = ImportCheckService().finalize(scan, files, summary, jpgs, self.event)
         self.assertFalse(check["cleanup_allowed"])
         self.assertTrue(summary.imported_files[0].destination.is_file())
 

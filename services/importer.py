@@ -194,6 +194,10 @@ class ImportSummary:
     imported_files: list[ImportedFile] = field(default_factory=list)
     check: dict[str, object] | None = None
 
+    @property
+    def imported_photos(self) -> list[Path]:
+        return [item.destination for item in self.imported_files if item.media_type == "photo"]
+
 
 class ImportService:
     """Scans, groups, copies, verifies, and logs event media imports."""
@@ -420,7 +424,7 @@ class ImportService:
         with log_path.open("a", encoding="utf-8") as file:
             file.write("\n".join(lines) + "\n\n")
 
-    def _walk_source(self, source: Path, failures: list[str]) -> list[Path]:
+    def _walk_source(self, source: Path, failures: list[str], *, media_only: bool = False) -> list[Path]:
         found: list[Path] = []
         for folder, directories, filenames in os.walk(
             source, onerror=lambda exc: failures.append(str(exc)), followlinks=False
@@ -431,13 +435,17 @@ class ImportService:
                     failures.append(f"{path}: linked folder was not scanned")
             for name in filenames:
                 path = Path(folder) / name
+                is_media = self._media_type(path) is not None
+                if is_system_file(path) or (media_only and not is_media):
+                    continue
                 try:
                     if path.is_file():
                         found.append(path)
-                    else:
+                    elif is_media:
                         failures.append(f"{path}: not a readable regular file")
                 except OSError as exc:
-                    failures.append(f"{path}: {exc}")
+                    if is_media:
+                        failures.append(f"{path}: {exc}")
         return found
 
     def _build_media_file(

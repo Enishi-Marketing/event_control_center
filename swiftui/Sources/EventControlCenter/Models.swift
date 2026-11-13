@@ -194,6 +194,7 @@ struct MediaSessionInfo: Codable, Identifiable {
     let photoCount: Int
     let videoCount: Int
     let fileCount: Int
+    let filePaths: [String]
     let startThumbnail: String?
     let endThumbnail: String?
 
@@ -229,6 +230,7 @@ struct ImportMediaPayload: Codable {
     let sessionIndexes: [Int]
     let eventName: String
     let brightness: Int
+    let selectedFilePaths: [String]
 }
 
 struct ImportOutcome: Codable {
@@ -276,6 +278,7 @@ struct ImportCheck: Codable {
     let selectedCount: Int
     let verifiedOriginalCount: Int
     let unimportedCount: Int
+    let unselectedCount: Int
     let rawPhotoCount: Int
     let rawVideoCount: Int
     let jpgCount: Int

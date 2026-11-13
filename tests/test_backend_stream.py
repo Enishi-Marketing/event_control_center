@@ -141,13 +141,18 @@ class BackendStreamTests(unittest.TestCase):
                 "-i", "testsrc2=size=320x180:rate=24", "-t", "0.5", "-c:v", "libx264",
                 "-preset", "ultrafast", str(original),
             ], check=True, capture_output=True, timeout=15)
+            unchecked = source / "unchecked.JPG"
+            unchecked.write_bytes(b"not selected for import")
+            later = original.stat().st_mtime + 3600
+            os.utime(unchecked, (later, later))
+            (source / "notes.txt").write_text("Keep this on the source")
             event = root / "events" / "2026.10.29 - Native video test"
             (event / "Data").mkdir(parents=True)
             metadata = event / "Data/metadata.json"
             metadata.write_text(json.dumps({"photo_count": 0, "video_count": 0}))
             environment = {**self.environment, "ECC_BACKEND_ROOT": str(self.project)}
             result = subprocess.run(
-                [str(self.probe), "real-import", str(source), str(event)],
+                [str(self.probe), "real-import", str(source), str(event), str(original)],
                 cwd=self.project, env=environment, capture_output=True, text=True, timeout=20,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -161,6 +166,7 @@ class BackendStreamTests(unittest.TestCase):
             self.assertEqual(events[-1]["outcome"]["filmcraft"]["proxiesLinked"], 1)
             self.assertEqual(events[-1]["outcome"]["filmcraft"]["timelinesCreated"], 3)
             self.assertTrue(events[-1]["outcome"]["check"]["cleanupAllowed"])
+            self.assertEqual(events[-1]["outcome"]["check"]["unselectedCount"], 1)
             self.assertFalse(events[-1]["outcome"]["failures"])
             self.assertIn("Creating smaller video", [entry.get("phase") for entry in events])
             self.assertIn("Preparing FilmCraft", [entry.get("phase") for entry in events])

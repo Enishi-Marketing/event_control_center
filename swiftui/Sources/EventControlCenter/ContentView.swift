@@ -136,9 +136,12 @@ struct ImportView: View {
                             Label(check.warnings.isEmpty ? "Import count check passed" : "Import needs attention — keep the source",
                                   systemImage: check.warnings.isEmpty ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
                                 .foregroundStyle(check.warnings.isEmpty ? Color.green : Color.orange)
-                            Text("Source: \(check.sourcePhotoCount) photos, \(check.sourceVideoCount) videos · \(check.sourceFileCount) files total")
-                            Text("Verified this import: \(check.verifiedOriginalCount) of \(check.selectedCount) selected · \(check.unimportedCount) source files not imported")
-                            Text("Event archive: \(check.rawPhotoCount) photos / \(check.jpgCount) JPG copies · \(check.rawVideoCount) videos / \(check.smallerVideoCount) smaller copies")
+                            Text("Verified originals: \(check.verifiedOriginalCount) of \(check.selectedCount) selected")
+                            Text("This import: \(check.jpgCount) of \(check.rawPhotoCount) JPG copies · \(check.smallerVideoCount) of \(check.rawVideoCount) smaller video copies")
+                            if check.unselectedCount > 0 {
+                                Text("Left on source by choice: \(check.unselectedCount) unselected files")
+                                    .foregroundStyle(.secondary)
+                            }
                             ForEach(check.warnings, id: \.self) { warning in
                                 Text(warning).font(.callout).foregroundStyle(.orange)
                             }
@@ -220,10 +223,8 @@ struct ImportView: View {
             }
         } message: {
             let imported = pendingSourceCleanup?.importedSources.count ?? 0
-            let failed = pendingSourceCleanup?.failed ?? 0
             Text(
-                "Only the \(imported) file(s) copied and verified during this import will be deleted."
-                    + (failed > 0 ? " \(failed) failed file(s) will stay on the card." : "")
+                "Only the \(imported) verified photos and videos from this import will be deleted. Unselected media and other files will stay on the card."
             )
         }
     }
@@ -389,8 +390,8 @@ struct ImportView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if let otherFiles = scan.otherFiles, !otherFiles.isEmpty {
-                    Text("\(otherFiles.count) unrecognized file(s) will stay on the source. Cleanup will be disabled; review the full count report after import.")
-                        .font(.callout).foregroundStyle(.orange)
+                    Text("\(otherFiles.count) other files will stay on the source.")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
                 if !scan.failures.isEmpty {
                     Text("\(scan.failures.count) source read issue(s). Keep the source; the scan may be incomplete.")
@@ -501,9 +502,10 @@ struct ImportView: View {
     }
 
     private func importSelected() async {
-        guard let currentFolder else { return }
+        guard let currentFolder, let scan else { return }
         let importedFromRemovableCard = sourceIsRemovable
-        let payload = ImportMediaPayload(source: sourcePath, eventFolder: currentFolder, sessionGapMinutes: sessionGap, sessionIndexes: selectedSessions.sorted(), eventName: eventName, brightness: Int(jpgBrightness))
+        let selectedFilePaths = scan.sessions.filter { selectedSessions.contains($0.index) }.flatMap(\.filePaths)
+        let payload = ImportMediaPayload(source: sourcePath, eventFolder: currentFolder, sessionGapMinutes: sessionGap, sessionIndexes: selectedSessions.sorted(), eventName: eventName, brightness: Int(jpgBrightness), selectedFilePaths: selectedFilePaths)
         isImporting = true
         lastImportCheck = nil
         lastFilmcraftResult = nil

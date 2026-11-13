@@ -124,18 +124,22 @@ or multipage originals are preserved; browsing previews are still images.
 Recognized formats that the converter cannot decode are still copied and verified
 in `Raw/Photos` or `Raw/Videos`. Additional recognized formats include AVIF,
 Photoshop, other camera RAW files, M4V, MKV, WebM, 3GP, MPEG, and WMV.
-The Import page compares source, selected, verified-original, JPG, and smaller-video
-counts. Missing conversions and unimported files produce a visible **Keep the
-source** warning and a detailed report under `Data/Import Checks`. Unknown files
-stay on the source and are listed in the report. Finder bookkeeping is excluded.
+The Import page checks that selected files have verified originals and the
+expected JPG or smaller-video copies. Missing originals or conversions produce
+a visible **Keep the source** warning and a detailed report under
+`Data/Import Checks`. Media from unchecked sessions stays on the source and is
+reported separately without failing the import check. Unknown files stay on
+the source and are listed in the report. Finder bookkeeping is excluded.
 Known camera bookkeeping (`NIKON*.DSC`, numeric `M*.CTG` files in
 `CANONMSC`, and `NCFL/NCSORLST.LST`) and `.fseventsd/fseventsd-uuid` are
 excluded from import counts and cleanup blockers, like Finder bookkeeping.
 These files stay on the card; cleanup deletes only verified imported media.
-Other unrecognized files continue to block cleanup for review.
-Card cleanup is offered only after the complete count check passes; immediately
-before deletion ECC re-verifies every source/archive pair with SHA-256 and checks
-that the conversion copies still exist. A failed preflight check deletes nothing.
+When the selected files pass the check, **Delete and eject** removes only the
+verified photos and videos from that import. Unchecked sessions and non-media
+files stay on the card. Before deletion, ECC checks for changes to the card's
+photo and video list, re-verifies each selected source/archive pair with
+SHA-256, and checks that its conversion still exists. A failed preflight check
+deletes nothing.
 
 ECC also populates a FilmCraft media library, attaches verified Smaller Videos as
 proxies, and creates **YouTube - 16x9**, **Vertical - 9x16**, and **Square - 1x1**

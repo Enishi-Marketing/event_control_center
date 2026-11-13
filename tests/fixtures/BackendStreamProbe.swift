@@ -14,7 +14,8 @@ struct BackendStreamProbe {
                 let payload = ImportMediaPayload(
                     source: CommandLine.arguments[2], eventFolder: CommandLine.arguments[3],
                     sessionGapMinutes: 20, sessionIndexes: [1],
-                    eventName: "Native video test", brightness: 0
+                    eventName: "Native video test", brightness: 0,
+                    selectedFilePaths: [CommandLine.arguments[4]]
                 )
                 for try await event in try client.importEvents(payload: payload) {
                     let data = try JSONEncoder().encode(event)

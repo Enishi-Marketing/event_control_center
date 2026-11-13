@@ -2,7 +2,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event
@@ -53,13 +53,15 @@ class UneditedJpgService:
         progress_callback: Callable[[UneditedJpgProgress], None] | None = None,
         regenerate_all: bool = False,
         brightness: int = 0,
+        *,
+        photos: Sequence[Path] | None = None,
     ) -> UneditedJpgSummary:
         extra_brightness_amount(brightness)
         summary = UneditedJpgSummary()
         source_folder = event_folder / "Raw" / "Photos"
         destination_folder = event_folder / "Unedited JPGs" / "Photos"
 
-        sources = self.supported_photos(source_folder)
+        sources = self.supported_photos(source_folder) if photos is None else photos
         if not sources:
             self._update_metadata_count(event_folder, destination_folder)
             self._emit_progress(

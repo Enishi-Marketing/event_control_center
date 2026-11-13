@@ -6,7 +6,7 @@ from pathlib import Path
 
 from services.drive_detector import DriveDetector
 from services.hash_service import HashService
-from services.importer import ImportService, is_system_file
+from services.importer import ImportService
 
 
 @dataclass
@@ -70,7 +70,7 @@ class SourceCleanupService:
             raise ValueError("Invalid import count report location.")
         event = receipt_path.parents[2]
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        if receipt["version"] != 1 or Path(receipt["source"]).resolve() != source.resolve():
+        if receipt["version"] != 2 or Path(receipt["source"]).resolve() != source.resolve():
             raise ValueError("The import count check belongs to a different source.")
         if Path(receipt["event_folder"]).resolve() != event or receipt["check"]["cleanup_allowed"] is not True:
             raise ValueError("Import count check has warnings; source cleanup is disabled.")
@@ -80,16 +80,23 @@ class SourceCleanupService:
         if not entries or len(verified) != len(entries) or requested != verified:
             raise ValueError("Cleanup files do not match this import count check.")
         failures: list[str] = []
-        current = {p.resolve() for p in ImportService()._walk_source(source, failures) if not is_system_file(p)}
-        if failures or current != verified:
-            raise ValueError("Source contents changed or contain unimported files. Scan and check the source again.")
+        scanner = ImportService()
+        current = scanner._walk_source(source, failures, media_only=True)
+        relative_paths = {str(p.relative_to(source)) for p in current}
+        if failures or any(p.is_symlink() for p in current) or relative_paths != set(receipt["source_media"]):
+            raise ValueError("Photos or videos on the source changed. Scan and check the source again.")
+        if not verified.issubset({p.resolve() for p in current}):
+            raise ValueError("Cleanup files do not match the photos and videos on the source.")
         validated = []
         hashes = HashService()
         for entry in entries:
             path = Path(entry["source"])
             destination = Path(entry["destination"])
             conversion = Path(entry["conversion"])
-            folder = "Photos" if entry["media_type"] == "photo" else "Videos"
+            media_type = scanner._media_type(path)
+            if media_type is None or entry["media_type"] != media_type:
+                raise ValueError(f"{path}: cleanup can only delete imported photos and videos")
+            folder = "Photos" if media_type == "photo" else "Videos"
             conversion_folder = event / "Unedited JPGs" / "Photos" if folder == "Photos" else event / "Raw" / "Smaller Videos"
             if (not self._is_within(path, source)
                 or not destination.resolve().is_relative_to(event / "Raw" / folder)

@@ -700,7 +700,7 @@ class ImportTab(ttk.Frame):
             f"Capture Time: {time_text}"
             f"{failure_text}"
             f"{preview_text}"
-            + (f"\nUnrecognized files left on source: {len(result.other_files)}. Keep the source." if result.other_files else "")
+            + (f"\nOther files will stay on the source: {len(result.other_files)}" if result.other_files else "")
         )
         self._render_selection_controls(result)
         self._set_status(
@@ -862,6 +862,7 @@ class ImportTab(ttk.Frame):
                 jpg_summary = self.unedited_jpg_service.generate_for_event(
                     event_folder=event_folder,
                     cancel_event=cancel_event,
+                    photos=summary.imported_photos,
                     progress_callback=lambda progress: self.worker_queue.put(
                         ("jpg_progress", progress)
                     ),
@@ -886,7 +887,7 @@ class ImportTab(ttk.Frame):
                 progress_callback=lambda p: self.worker_queue.put(("stage_progress", p.message)),
             ) if not summary.cancelled and summary.imported_sources else FilmcraftSummary()
             if self.scan_result is not None:
-                ImportCheckService().finalize(self.scan_result, len(files), summary, jpg_summary, event_folder,
+                ImportCheckService().finalize(self.scan_result, files, summary, jpg_summary, event_folder,
                                              project_summary.failures + filmcraft.failures + filmcraft.proxy_problems)
             self.worker_queue.put(
                 ("import_success", (summary, jpg_summary, project_summary, source, filmcraft))
@@ -1053,9 +1054,9 @@ class ImportTab(ttk.Frame):
         check = getattr(import_summary, "check", None) or {}
         count_text = (
             f"\nCount check: {check.get('verified_original_count', 0)} of {check.get('selected_count', 0)} selected originals verified.\n"
-            f"Source files: {check.get('source_file_count', 0)}; not imported: {check.get('unimported_count', 0)}\n"
-            f"Archive photos/JPGs: {check.get('raw_photo_count', 0)}/{check.get('jpg_count', 0)}\n"
-            f"Archive videos/smaller copies: {check.get('raw_video_count', 0)}/{check.get('smaller_video_count', 0)}\n"
+            f"Unselected files left on source: {check.get('unselected_count', 0)}\n"
+            f"Photos/JPGs from this import: {check.get('raw_photo_count', 0)}/{check.get('jpg_count', 0)}\n"
+            f"Videos/smaller copies from this import: {check.get('raw_video_count', 0)}/{check.get('smaller_video_count', 0)}\n"
             + "\n".join(check.get("warnings", []))
             + f"\nFull report: {check.get('report_path', 'Unavailable; keep the source')}\n"
         )
@@ -1119,7 +1120,11 @@ class ImportTab(ttk.Frame):
         import_summary: object,
         source: Path | None,
     ) -> None:
-        if source is None:
+        index = self.source_combo.current()
+        if source is None or not 0 <= index < len(self.sources):
+            return
+        selected_source = self.sources[index]
+        if selected_source.path != source or not selected_source.is_removable:
             return
 
         cancelled = getattr(import_summary, "cancelled", False)
@@ -1132,18 +1137,12 @@ class ImportTab(ttk.Frame):
         if self.source_cleanup_service.ejectable_mount(source) is None:
             return
 
-        failed = getattr(import_summary, "failed", 0)
-        warning = (
-            f"\n\n{failed} files failed import and will stay on the source."
-            if failed
-            else ""
-        )
         confirmed = messagebox.askyesno(
             "Delete and Eject Source?",
             "Do you want to delete the verified imported files from the source "
             "and eject it now?\n\n"
-            "Only files that were copied and verified will be deleted."
-            f"{warning}",
+            "Only verified photos and videos from this import will be deleted. "
+            "Unselected media and other files will stay on the source.",
             icon="warning",
         )
         if not confirmed:

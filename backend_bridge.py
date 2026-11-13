@@ -22,7 +22,7 @@ from services.drive_detector import DriveDetector
 from services.folder_service import FolderService
 from services.filmcraft_service import FilmcraftProgress, FilmcraftService, FilmcraftSummary
 from services.hero_library_service import HeroLibraryService
-from services.importer import ImportProgress, ImportService, MediaScanResult
+from services.importer import ImportProgress, ImportService, MediaFile, MediaScanResult
 from services.import_check_service import ImportCheckService
 from services.keyword_service import KeywordVocabulary
 from services.media_count_service import MediaCountService
@@ -104,6 +104,7 @@ def _scan_result(result: MediaScanResult) -> dict[str, Any]:
                 "photo_count": session.photo_count,
                 "video_count": session.video_count,
                 "file_count": len(session.files),
+                "file_paths": [str(item.path) for item in session.files],
                 "start_thumbnail": (
                     str(session.start_thumbnail.path)
                     if session.start_thumbnail is not None
@@ -200,13 +201,7 @@ def _validate_import_paths(source: Path, event_folder: Path) -> None:
             raise ValueError("Choose unimported media, not an output folder inside the event.")
 
 
-def _import_media(
-    payload: dict[str, Any],
-    progress_callback: Callable[[ImportProgress], None] | None = None,
-) -> dict[str, Any]:
-    source = Path(str(payload["source"]))
-    event_folder = Path(str(payload["event_folder"]))
-    _validate_import_paths(source, event_folder)
+def _scan_import_selection(source: Path, payload: dict[str, Any]) -> tuple[MediaScanResult, list[MediaFile]]:
     gap_minutes = max(1, int(payload.get("session_gap_minutes", 20)))
     selected_sessions = {int(value) for value in payload.get("session_indexes", [])}
     scan = ImportService().scan_media(source, gap_minutes)
@@ -216,8 +211,24 @@ def _import_media(
         if session.index in selected_sessions
         for item in session.files
     ]
+    expected_paths = payload.get("selected_file_paths")
+    if expected_paths is None:
+        raise ValueError("Scan the source and select media before importing.")
+    if {str(item.path) for item in selected_files} != set(expected_paths):
+        raise ValueError("The selected sessions changed since the scan. Scan the source again and review the selection.")
     if not selected_files:
         raise ValueError("Select at least one media session to import.")
+    return scan, selected_files
+
+
+def _import_media(
+    payload: dict[str, Any],
+    progress_callback: Callable[[ImportProgress], None] | None = None,
+) -> dict[str, Any]:
+    source = Path(str(payload["source"]))
+    event_folder = Path(str(payload["event_folder"]))
+    _validate_import_paths(source, event_folder)
+    scan, selected_files = _scan_import_selection(source, payload)
 
     service = ImportService()
     summary = service.import_media(
@@ -241,6 +252,7 @@ def _import_media(
     jpg_summary = UneditedJpgService().generate_for_event(
         event_folder,
         brightness=int(payload.get("brightness", 0)),
+        photos=summary.imported_photos,
     )
     projects = ProjectService()
     created = projects.create_projects(event_folder, str(payload.get("event_name", "")), summary.photos_imported > 0, summary.videos_imported > 0)
@@ -250,7 +262,7 @@ def _import_media(
         progress_callback=(lambda p: progress_callback(ImportProgress(p.current, p.total, message=p.message, phase="Preparing FilmCraft"))) if progress_callback else None,
     ) if summary.imported_sources else FilmcraftSummary()
     preparation_failures = created.failures + filmcraft.failures + filmcraft.proxy_problems
-    check = ImportCheckService().finalize(scan, len(selected_files), summary, jpg_summary, event_folder, preparation_failures)
+    check = ImportCheckService().finalize(scan, selected_files, summary, jpg_summary, event_folder, preparation_failures)
     return {
         "source": str(source),
         "photos_imported": summary.photos_imported,
@@ -276,20 +288,9 @@ def _stream_import_media(payload: dict[str, Any]) -> None:
     event_folder = Path(str(payload["event_folder"]))
     try:
         _validate_import_paths(source, event_folder)
-    except ValueError as exc:
+        scan, selected_files = _scan_import_selection(source, payload)
+    except (OSError, ValueError) as exc:
         _emit_stream_event("error", error=str(exc))
-        return
-    gap_minutes = max(1, int(payload.get("session_gap_minutes", 20)))
-    selected_sessions = {int(value) for value in payload.get("session_indexes", [])}
-    scan = ImportService().scan_media(source, gap_minutes)
-    selected_files = [
-        item
-        for session in scan.sessions
-        if session.index in selected_sessions
-        for item in session.files
-    ]
-    if not selected_files:
-        _emit_stream_event("error", error="Select at least one media session to import.")
         return
 
     import_count = len(selected_files)
@@ -353,10 +354,11 @@ def _stream_import_media(payload: dict[str, Any]) -> None:
             event_name=str(payload.get("event_name", "")),
         )
         jpg_service = UneditedJpgService()
+        imported_photos = summary.imported_photos
         jpeg_destination = event_folder / "Unedited JPGs" / "Photos"
         jpeg_estimate = sum(
             1
-            for photo in jpg_service.supported_photos(event_folder / "Raw" / "Photos")
+            for photo in imported_photos
             if not (jpeg_destination / f"{photo.stem}.jpg").exists()
         )
         has_photos = summary.photos_imported > 0
@@ -367,6 +369,7 @@ def _stream_import_media(payload: dict[str, Any]) -> None:
             event_folder,
             progress_callback=jpg_progress_callback,
             brightness=int(payload.get("brightness", 0)),
+            photos=imported_photos,
         )
         projects_to_create = project_estimate
         if projects_to_create:
@@ -396,7 +399,7 @@ def _stream_import_media(payload: dict[str, Any]) -> None:
             newly_created=project_summary.filmcraft_created, progress_callback=filmcraft_progress,
         ) if has_photos or has_videos else FilmcraftSummary()
         preparation_failures = project_summary.failures + filmcraft.failures + filmcraft.proxy_problems
-        check = ImportCheckService().finalize(scan, len(selected_files), summary, jpg_summary, event_folder, preparation_failures)
+        check = ImportCheckService().finalize(scan, selected_files, summary, jpg_summary, event_folder, preparation_failures)
         outcome = {
             # Preserve the source used for this import. The UI continues to
             # monitor mounted media after an import finishes, so its selected
