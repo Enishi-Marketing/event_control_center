@@ -15,6 +15,7 @@ export PYINSTALLER_CONFIG_DIR="${PYINSTALLER_CONFIG_DIR:-$PWD/.pyinstaller}"
 VERSION="$(tr -d '[:space:]' < VERSION)"
 
 "$PYTHON_BIN" scripts/prepare_filmcraft_tool.py
+"$PYTHON_BIN" scripts/prepare_lightcraft_tool.py
 "$PYTHON_BIN" -m PyInstaller EventControlCenter.spec --noconfirm --clean
 
 APP_PATH="dist/Event Control Center.app"

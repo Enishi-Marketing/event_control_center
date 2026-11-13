@@ -107,6 +107,7 @@ struct ImportView: View {
     @State private var pendingSourceCleanup: ImportOutcome?
     @State private var lastImportCheck: ImportCheck?
     @State private var lastFilmcraftResult: FilmcraftResult?
+    @State private var lastLightcraftPath: String?
     @State private var isCleaningUpSource = false
     @State private var cardSafetyMessage: String?
     @State private var cardIsSafeToRemove = false
@@ -148,6 +149,13 @@ struct ImportView: View {
                             Button("Open full count report") {
                                 NSWorkspace.shared.open(URL(fileURLWithPath: check.reportPath))
                             }
+                        }
+                    }
+                }
+                if let path = lastLightcraftPath {
+                    Card {
+                        Button("Show LightCraft catalog in Finder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
                         }
                     }
                 }
@@ -195,12 +203,13 @@ struct ImportView: View {
         .onChange(of: sourcePath) { _, path in
             if !path.isEmpty && !isCleaningUpSource {
                 clearCardSafetyStatus()
-                if !isImporting { lastImportCheck = nil; lastFilmcraftResult = nil }
+                if !isImporting { lastImportCheck = nil; lastFilmcraftResult = nil; lastLightcraftPath = nil }
             }
         }
         .onChange(of: currentFolder) { _, _ in
             lastImportCheck = nil
             lastFilmcraftResult = nil
+            lastLightcraftPath = nil
             pendingSourceCleanup = nil
         }
         .onChange(of: destination) { old, new in
@@ -509,6 +518,7 @@ struct ImportView: View {
         isImporting = true
         lastImportCheck = nil
         lastFilmcraftResult = nil
+        lastLightcraftPath = nil
         pendingSourceCleanup = nil
         importStartedAt = Date()
         importProgress = ImportStreamEvent(
@@ -533,6 +543,7 @@ struct ImportView: View {
             app.notice = "Imported \(outcome.photosImported) photos and \(outcome.videosImported) videos. Generated \(outcome.jpgsGenerated) JPGs and \(outcome.socialVideosGenerated) smaller video copies."
             lastImportCheck = outcome.check
             lastFilmcraftResult = outcome.filmcraft
+            lastLightcraftPath = outcome.lightcraftPath
             let warnings = (outcome.check?.warnings ?? []) + outcome.failures
             if !warnings.isEmpty {
                 app.errorMessage = "Import finished with issues. Keep the source.\n\n" + warnings.prefix(8).joined(separator: "\n")

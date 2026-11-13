@@ -4,6 +4,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from config.config import AppConfig
+from services.lightcraft_service import prepare_lightcraft
+
+
+def legacy_filmcraft_path(event_folder: Path, project_file: Path) -> Path:
+    return event_folder / project_file.stem / project_file.name
 
 
 @dataclass
@@ -17,6 +22,7 @@ class ProjectCreationSummary:
     failures: list[str] = field(default_factory=list)
     filmcraft_created: bool = False
     filmcraft_skipped: bool = False
+    lightcraft_path: str | None = None
 
 
 class ProjectService:
@@ -51,6 +57,14 @@ class ProjectService:
                 )
             except Exception as exc:
                 summary.failures.append(f"Lightroom project: {exc}")
+            try:
+                path, failures = prepare_lightcraft(
+                    event_folder, event_folder / f"{clean_name} Catalog", clean_name,
+                )
+                summary.lightcraft_path = str(path) if path else None
+                summary.failures.extend(f"LightCraft: {failure}" for failure in failures)
+            except Exception as exc:
+                summary.failures.append(f"LightCraft: {exc}")
 
         if has_videos:
             try:
@@ -98,7 +112,7 @@ class ProjectService:
         if not self.premiere_template.exists():
             raise FileNotFoundError(f"Premiere template not found: {self.premiere_template}")
 
-        project_folder = event_folder / f"{clean_name} Premiere Project"
+        project_folder = self._video_project_folder(event_folder, clean_name)
         project_file = project_folder / f"{clean_name} Premiere Project.prproj"
         if project_file.exists():
             return False, True
@@ -117,7 +131,7 @@ class ProjectService:
 
         project_file = self.filmcraft_project_path(event_folder, clean_name)
         project_folder = project_file.parent
-        if project_file.exists():
+        if project_file.exists() or legacy_filmcraft_path(event_folder, project_file).is_file():
             return False, True
 
         project_folder.mkdir(parents=True, exist_ok=True)
@@ -126,7 +140,11 @@ class ProjectService:
 
     def filmcraft_project_path(self, event_folder: Path, event_name: str) -> Path:
         name = self._safe_filename(event_name or self._event_name_from_folder(event_folder))
-        return event_folder / f"{name} Filmcraft Project" / f"{name} Filmcraft Project.fcproj"
+        return self._video_project_folder(event_folder, name) / f"{name} Filmcraft Project.fcproj"
+
+    @staticmethod
+    def _video_project_folder(event_folder: Path, name: str) -> Path:
+        return event_folder / f"{name} Premiere Project"
 
     def _event_name_from_folder(self, event_folder: Path) -> str:
         folder_name = event_folder.name

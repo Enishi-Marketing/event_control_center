@@ -20,11 +20,12 @@ hiddenimports = (
 a = Analysis(
     ["backend_bridge.py"],
     pathex=[],
-    binaries=[(get_ffmpeg_exe(), "imageio_ffmpeg/binaries"), ("build/filmcraft-tool/filmcraft-cli", "filmcraft")],
+    binaries=[(get_ffmpeg_exe(), "imageio_ffmpeg/binaries"), ("build/filmcraft-tool/filmcraft-cli", "filmcraft"), ("build/lightcraft-tool/lightcraft-cli", "lightcraft")],
     datas=[("assets/templates", "templates")]
     + collect_data_files("imageio_ffmpeg", excludes=["binaries/ffmpeg-*"])
     + copy_metadata("imageio-ffmpeg")
-    + [(str(path), "filmcraft/licenses") for path in Path("build/filmcraft-tool").iterdir() if path.is_file() and path.name != "filmcraft-cli"],
+    + [(str(path), "filmcraft/licenses") for path in Path("build/filmcraft-tool").iterdir() if path.is_file() and path.name != "filmcraft-cli"]
+    + [(str(path), "lightcraft/licenses") for path in Path("build/lightcraft-tool").iterdir() if path.is_file() and path.name != "lightcraft-cli"],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

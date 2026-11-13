@@ -1083,6 +1083,9 @@ class ImportTab(ttk.Frame):
             getattr(project_summary, "filmcraft_skipped", False),
             videos > 0,
         )
+        lightcraft_text = (
+            f"LightCraft catalog: {project_summary.lightcraft_path}\n" if project_summary.lightcraft_path else ""
+        )
         title = "Import Cancelled" if cancelled else "Import Complete"
         self._set_status(title)
         self.current_file_var.set(title)
@@ -1104,6 +1107,7 @@ class ImportTab(ttk.Frame):
             f"Unedited JPGs Skipped:\n{jpg_skipped}\n"
             f"Unedited JPG Failures:\n{jpg_failed}\n"
             f"Lightroom Project:\n{lightroom_text}\n"
+            f"{lightcraft_text}"
             f"Premiere Project:\n{premiere_text}\n"
             f"Filmcraft Project:\n{filmcraft_text}\n"
             f"FilmCraft library: {filmcraft.videos} videos, {filmcraft.photos} photos\n"

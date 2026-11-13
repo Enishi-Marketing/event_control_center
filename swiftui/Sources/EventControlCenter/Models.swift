@@ -246,6 +246,7 @@ struct ImportOutcome: Codable {
     let importedSources: [String]
     let check: ImportCheck?
     let filmcraft: FilmcraftResult?
+    let lightcraftPath: String?
 }
 
 struct FilmcraftResult: Codable {

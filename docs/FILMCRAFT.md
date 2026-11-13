@@ -3,7 +3,9 @@
 ECC prepares FilmCraft projects after original media has been copied and verified,
 Smaller Videos are available, browsing JPGs have been generated, and editing
 project files have been created. This works for photo-only events and for adding
-media to an existing event. Premiere remains video-only.
+media to an existing event. Both project files live in the event’s Premiere
+Project folder. Photo-only events get a FilmCraft project there without a
+Premiere project file.
 
 The native Import page shows preparation progress and the final video, photo,
 proxy, problem, and timeline counts. **Utilities → FilmCraft assemblies →
@@ -14,8 +16,9 @@ reimporting camera files. The backend commands are `prepare_filmcraft` and
 ## Media and proxies
 
 Originals come only from `Raw/Videos` and `Raw/Photos`. The media library has
-Media/Videos, Media/Photos, and Timelines bins. One source asset is shared by all
-three generated timelines. Proxies never appear as independent footage.
+Media/Videos, Media/Photos, and Timelines bins. Photos are available in
+Media/Photos for manual editing. All three generated timelines share the same
+video source assets. Proxies never appear as independent footage.
 
 Video media references point at the originals. Proxies use the exact mapping
 implemented by `SocialVideoService.destination_for`, including names such as
@@ -87,10 +90,10 @@ The generated timelines are:
 | Square - 1x1 | 1080 × 1080 |
 
 They default to 30 fps; an optional `filmcraft_frame_rate` in event metadata can
-select a supported rate between 1 and 240 fps. All three contain every readable
-event asset in the same capture order, starting at zero. Photos last three
-seconds. Video and linked audio use the original engine-probed duration in exact
-254,016,000,000-per-second ticks, including fractional sequence-frame durations.
+select a supported rate between 1 and 240 fps. All three contain the readable
+event videos in the same capture order, starting at zero. Photo-only events have
+empty timelines. Video and linked audio use the original engine-probed duration
+in exact 254,016,000,000-per-second ticks, including fractional sequence-frame durations.
 Extra original audio streams get synchronized linked clips on additional tracks.
 
 Scaling uses the original's oriented display dimensions and pixel aspect ratio:
@@ -113,15 +116,20 @@ content can keep its asset ID after a rename. Existing linked media can be adopt
 with the engine's identity-checked relinking when ECC's state is absent.
 
 Each generated timeline's complete content hash is recorded. An unchanged managed
-timeline is rebuilt in the refreshed document. An edited one is preserved and a
-clearly named `… (ECC refreshed N)` timeline is added. Separate user sequences and
-their references remain in the refreshed document.
+timeline is reused when the ordered video inputs and sequence settings are
+unchanged. When those inputs change, ECC rebuilds untouched managed timelines
+and preserves edited ones alongside a new `… (ECC refreshed N)` timeline.
+Separate user sequences and their references remain in the refreshed document.
+Previously verified proxy links are reused when the source, proxy, provenance
+record, and existing link still match.
 
 Only a blank project created by the same import operation can be replaced, with
 a recoverable copy under `Data/FilmCraft/Backups`. Later changes produce a new
 `… - ECC refreshed NNN.fcproj` file, preserving the previous working project.
 The UI opens the prepared file when the user chooses **Open prepared project**.
-Unchanged runs reuse the current prepared file without rewriting it.
+Unchanged runs reuse the current prepared file without rewriting it. Preparing
+an event whose FilmCraft project is in the old separate folder saves a refreshed
+copy in the Premiere Project folder and leaves the old file in place.
 
 Preparation uses a per-event lock, a disposable draft, FilmCraft format validation,
 atomic publication, and a final check that the source project did not change

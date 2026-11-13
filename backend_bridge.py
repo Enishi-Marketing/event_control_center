@@ -276,6 +276,7 @@ def _import_media(
         "imported_sources": [str(path) for path in summary.imported_sources],
         "check": check,
         "filmcraft": asdict(filmcraft),
+        "lightcraft_path": created.lightcraft_path,
     }
 
 
@@ -416,6 +417,7 @@ def _stream_import_media(payload: dict[str, Any]) -> None:
             "imported_sources": [str(path) for path in summary.imported_sources],
             "check": check,
             "filmcraft": asdict(filmcraft),
+            "lightcraft_path": project_summary.lightcraft_path,
         }
     except Exception as exc:
         _emit_stream_event("error", error=str(exc))

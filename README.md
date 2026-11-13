@@ -141,11 +141,21 @@ photo and video list, re-verifies each selected source/archive pair with
 SHA-256, and checks that its conversion still exists. A failed preflight check
 deletes nothing.
 
+For imports with camera RAW files, ECC prepares a native LightCraft library in
+`<Event> Catalog/<Event> LightCraft Library`, beside the Lightroom catalog.
+Open its `catalog.snap` through LightCraft’s **Open Library** command. LightCraft
+links to the original RAW files in `Raw/Photos` using absolute paths. If the
+event moves to another path, use LightCraft to locate the originals. Later
+photo imports add new RAW files to the same library and preserve existing edits.
+Source runs can prepare the CLI with
+`.venv/bin/python scripts/prepare_lightcraft_tool.py`. The macOS builds bundle it.
+
 ECC also populates a FilmCraft media library, attaches verified Smaller Videos as
 proxies, and creates **YouTube - 16x9**, **Vertical - 9x16**, and **Square - 1x1**
-chronological assemblies. Photos last three seconds, and all media fits without
-cropping or upscaling. Utilities has **Prepare / repair FilmCraft** for existing
-events. Edited timelines and working projects are preserved in refreshed
+chronological video assemblies. Videos fit without cropping or upscaling, and
+photos stay in the media library for manual use. The FilmCraft project is saved
+in the event’s Premiere Project folder. Utilities has **Prepare / repair FilmCraft**
+for existing events. Edited timelines and working projects are preserved in refreshed
 assemblies. See [FilmCraft preparation](docs/FILMCRAFT.md) for portability,
 photo intermediates, runtime setup, and supported failure handling.
 
@@ -366,7 +376,7 @@ python3 main.py
 - SHA-256 verification, progress updates, cancellation, metadata count updates, and append-only import logs
 - Automatic Unedited JPG generation with a gentle brightness lift for dark photos
 - Lightroom catalog creation for photo imports
-- Premiere and Filmcraft project creation for video imports, named after the event
+- Premiere and FilmCraft projects share the event’s Premiere Project folder
 - Event import destination choice: Google Drive or local Events folder
 
 ## Planned Areas

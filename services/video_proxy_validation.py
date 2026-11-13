@@ -42,7 +42,7 @@ def _sample(path: Path, seconds: float, audio: bool = False) -> bytes:
     return result.stdout
 
 
-def verify_proxy_origin(event: Path, source: Path, proxy: Path, source_info: dict) -> None:
+def verify_proxy_origin(event: Path, source: Path, proxy: Path, source_info: dict) -> dict:
     manifest = event / "Data" / "smaller_video_manifest.json"
     record = json.loads(manifest.read_text()).get("videos", {}).get(str(source.relative_to(event)), {}) if manifest.exists() else {}
     original = media_identity(source, record.get("source_identity"))
@@ -52,7 +52,7 @@ def verify_proxy_origin(event: Path, source: Path, proxy: Path, source_info: dic
             or not same_content(original, record.get("source_identity", {}))
             or not same_content(smaller, record.get("proxy_identity", {}))):
             raise ValueError("The Smaller Videos provenance no longer matches the original and proxy. Rebuild this smaller copy.")
-        return
+        return record
     # Older ECC copies have no provenance manifest. Check content as well as the
     # engine's separate exact frame-rate / one-frame duration compatibility check.
     duration = source_info["duration"] / 254_016_000_000
@@ -83,3 +83,4 @@ def verify_proxy_origin(event: Path, source: Path, proxy: Path, source_info: dic
     if not same_content(original, media_identity(source)) or not same_content(smaller, media_identity(proxy)):
         raise ValueError("Media changed while checking proxy correspondence.")
     record_proxy(event, source, proxy, original, smaller)
+    return {"proxy": str(proxy.relative_to(event)), "source_identity": original, "proxy_identity": smaller}

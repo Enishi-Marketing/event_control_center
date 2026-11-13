@@ -45,7 +45,7 @@ class BundledProjectTemplateTests(unittest.TestCase):
             self.assertTrue(
                 (event / "Example Event Premiere Project" / "Example Event Premiere Project.prproj").is_file()
             )
-            created_filmcraft = event / "Example Event Filmcraft Project" / "Example Event Filmcraft Project.fcproj"
+            created_filmcraft = event / "Example Event Premiere Project" / "Example Event Filmcraft Project.fcproj"
             self.assertEqual(created_filmcraft.read_bytes(), filmcraft.read_bytes())
 
     def test_repeat_video_import_keeps_edited_projects(self) -> None:
@@ -58,7 +58,7 @@ class BundledProjectTemplateTests(unittest.TestCase):
             first = service.create_projects(event, '  Sports: Day / Finals?  ', False, True)
             self.assertEqual(first.failures, [])
             for editor, extension in [("Premiere", "prproj"), ("Filmcraft", "fcproj")]:
-                project = event / f"Sports- Day - Finals- {editor} Project" / f"Sports- Day - Finals- {editor} Project.{extension}"
+                project = event / "Sports- Day - Finals- Premiere Project" / f"Sports- Day - Finals- {editor} Project.{extension}"
                 project.write_bytes(b"edited project")
 
             repeated = service.create_projects(event, '  Sports: Day / Finals?  ', False, True)
@@ -95,7 +95,7 @@ class BundledProjectTemplateTests(unittest.TestCase):
             self.assertFalse(result.premiere_created)
             self.assertTrue(result.filmcraft_created)
             self.assertFalse(result.filmcraft_skipped)
-            self.assertEqual({folder.name for folder in event.iterdir()}, {"Event Catalog", "Event Filmcraft Project"})
+            self.assertEqual({folder.name for folder in event.iterdir()}, {"Event Catalog", "Event Premiere Project"})
 
     def test_old_default_paths_migrate_to_bundled_templates(self) -> None:
         legacy = Path.home() / "Documents" / "Blank_Lightroom"

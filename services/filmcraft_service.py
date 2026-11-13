@@ -21,9 +21,10 @@ from uuid import uuid4
 
 from config.config import AppConfig
 from services.filmcraft_client import FilmcraftClient
-from services.filmcraft_media import capture_time, photo_intermediate, video_rotation
+from services.filmcraft_media import capture_time, photo_intermediate
 from services.importer import PHOTO_EXTENSIONS, VIDEO_EXTENSIONS, is_system_file
 from services.media_identity import atomic_json, media_identity, same_content
+from services.project_service import legacy_filmcraft_path
 from services.social_video_service import SocialVideoService
 from services.video_proxy_validation import verify_proxy_origin
 
@@ -109,6 +110,8 @@ class FilmcraftService:
         if state.get("version") != 1:
             raise ValueError("The FilmCraft assembly record is from an unsupported version; it was left untouched.")
         source_project = event / state["project"] if state.get("project") else canonical
+        if not state.get("project") and not canonical.exists():
+            source_project = legacy_filmcraft_path(event, canonical)
         if not source_project.is_file():
             raise FileNotFoundError("The existing FilmCraft project is missing. Restore it before refreshing the assembly.")
         original_bytes = source_project.read_bytes()
@@ -169,8 +172,6 @@ class FilmcraftService:
                         asset["uuid"] = uuid4().hex
                         asset["force_new"] = True
                         summary.warnings.append(f"Preserved a changed photo intermediate for {relative}; creating a fresh full-resolution representation.")
-                if kind == "video" and "source_rotation" not in asset:
-                    asset["source_rotation"] = video_rotation(source)
                 asset.setdefault("uuid", uuid4().hex)
                 if not asset.get("capture_time") or state.get("capture_timezone") != event_metadata.get("capture_timezone") or old.get("signature", {}).get("mtime_ns") != identity["mtime_ns"]:
                     hint = hints.get(relative, {})
@@ -192,9 +193,10 @@ class FilmcraftService:
                             "name": event_metadata.get("event_name"),
                             "representations": {a["relative"]: a.get("representation_signature") for a in assets if a.get("representation")},
                             "proxy_manifest": hashlib.sha256(manifest.read_bytes()).hexdigest() if manifest.exists() else None,
-                            "assembly_version": 3})
+                            "assembly_version": 4})
         signature = input_signature()
-        if (not summary.failures and state.get("input_signature") == signature and state.get("project_hash") == original_hash
+        if (not summary.failures and source_project.parent == canonical.parent
+            and state.get("input_signature") == signature and state.get("project_hash") == original_hash
             and all((event / a.get("representation", a["relative"])).is_file() for a in assets)):
             cached = state["summary"]
             for key, value in cached.items():
@@ -214,11 +216,12 @@ class FilmcraftService:
         timeline_bin = self._bin(project, "Timelines")
         # A first import can replace only the blank file created by this same
         # import operation. Every later change is a fresh, recoverable project.
-        target = canonical if newly_created and not state.get("project") else self._refreshed_path(canonical)
+        target = canonical if newly_created and source_project == canonical and not state.get("project") else self._refreshed_path(canonical)
+        target.parent.mkdir(parents=True, exist_ok=True)
         source_hash_before = original_hash
         with tempfile.TemporaryDirectory(prefix=".filmcraft-session-", dir=folder) as temporary:
             temporary = Path(temporary)
-            draft = source_project.parent / f".ecc-filmcraft-{uuid4().hex}.fcproj"
+            draft = target.parent / f".ecc-filmcraft-{uuid4().hex}.fcproj"
             try:
                 atomic_json(draft, document)
                 pending = []
@@ -323,6 +326,11 @@ class FilmcraftService:
                     if any(not row.get("ok") for row in rows):
                         raise ValueError("FilmCraft could not organize the original media bins.")
                     document = json.loads(draft.read_text())
+                manifest_path = event / "Data" / "smaller_video_manifest.json"
+                try:
+                    proxy_records = json.loads(manifest_path.read_text()).get("videos", {})
+                except (OSError, ValueError):
+                    proxy_records = {}
                 for index, asset in enumerate(active, 1):
                     if asset["kind"] != "video":
                         continue
@@ -330,9 +338,17 @@ class FilmcraftService:
                     original = event / asset["relative"]
                     proxy = SocialVideoService.destination_for(original, event)
                     media = _media(document["project"]["items"][str(asset["item"])])
+                    proxy_record = proxy_records.get(asset["relative"])
+                    verified_proxy = _digest([asset["signature"], asset["proxy_signature"], proxy_record, media["info"]])
+                    previous_proxy = asset.pop("verified_proxy", None)
                     try:
                         if not original.is_file() or not proxy.is_file():
                             raise ValueError("Original or smaller video is missing")
+                        linked = (media.get("proxy") or {}).get("File", {}).get("path")
+                        if proxy_record and previous_proxy == verified_proxy and linked == str(proxy.resolve()):
+                            asset["verified_proxy"] = verified_proxy
+                            summary.proxies_linked += 1
+                            continue
                         pi = client.probe(proxy, temporary)
                         vi = media["info"].get("video")
                         if not vi or not pi.get("video"):
@@ -350,11 +366,13 @@ class FilmcraftService:
                             proxy_audio[i]["channels"] < stream["channels"] for i, stream in enumerate(original_audio)
                         ):
                             raise ValueError("Proxy loses original audio channels. Rebuild the smaller copy with ECC.")
-                        verify_proxy_origin(event, original, proxy, media["info"])
+                        checked_record = verify_proxy_origin(event, original, proxy, media["info"])
                         rows = client.run(draft, [_step("media.attachProxies", item=asset["item"], path=str(proxy), force=False)], temporary)
                         if not rows[0].get("ok"):
                             raise ValueError(rows[0].get("error", "FilmCraft refused this proxy"))
                         document = json.loads(draft.read_text())
+                        if proxy_record and checked_record == proxy_record:
+                            asset["verified_proxy"] = verified_proxy
                         summary.proxies_linked += 1
                     except Exception as exc:
                         summary.proxy_problems.append(f"{asset['relative']}: {exc}")
@@ -364,11 +382,20 @@ class FilmcraftService:
                         atomic_json(draft, document)
 
                 document = json.loads(draft.read_text()); project = document["project"]
+                videos = [asset for asset in active if asset["kind"] == "video"]
+                timeline_signature = _digest([fps, PROFILES, [
+                    [asset["item"], asset["signature"]["fingerprint"],
+                     _media(project["items"][str(asset["item"])])["info"]]
+                    for asset in videos
+                ]])
                 tracked = {}
                 for name, width, height in PROFILES:
-                    emit(f"Creating {name} timeline…")
                     previous = state.get("timelines", {}).get(name, {})
                     item = project["items"].get(str(previous.get("item")))
+                    if item and "Sequence" in item["kind"] and state.get("timeline_signature") == timeline_signature:
+                        tracked[name] = previous
+                        continue
+                    emit(f"Preparing {name} timeline…")
                     if item and _digest(item) == previous.get("hash"):
                         sequence_id = item["id"]
                         sequence = item["kind"]["Sequence"]
@@ -406,9 +433,9 @@ class FilmcraftService:
                     steps = [_step("sequence.open", item=sequence_id)]
                     frame_rate = item["kind"]["Sequence"]["settings"]["frame_rate"]
                     frame_duration = Fraction(TICKS * frame_rate["den"], frame_rate["num"])
-                    for asset in active:
+                    for asset in videos:
                         info = _media(project["items"][str(asset["item"])])["info"]
-                        duration = 3 * TICKS if asset["kind"] == "photo" else int(info["duration"])
+                        duration = int(info["duration"])
                         if duration <= 0:
                             raise ValueError(f"Invalid source duration: {asset['relative']}")
                         steps.append(_step("timeline.place", item=asset["item"], time=native_cursor, duration=duration, insert=False, matchSequence=False))
@@ -419,7 +446,7 @@ class FilmcraftService:
                         raise ValueError("; ".join(str(p) for p in problems))
                     document = json.loads(draft.read_text()); project = document["project"]
                     item = project["items"][str(sequence_id)]
-                    self._finish_sequence(project, item["kind"]["Sequence"], active, width, height)
+                    self._finish_sequence(project, item["kind"]["Sequence"], videos, width, height)
                     # Move only this sequence's reference, leaving other user bins
                     # and sequences intact.
                     self._remove_reference(project["root"], sequence_id)
@@ -429,7 +456,7 @@ class FilmcraftService:
                 if not active and files:
                     raise ValueError("FilmCraft could not import any event media. The existing project was preserved.")
                 emit("Saving and validating FilmCraft project…")
-                self._portable_references(document, event, source_project.parent)
+                self._portable_references(document, event, target.parent)
                 document.setdefault("view", {})["open_sequences"] = [tracked[name]["item"] for name, _, _ in PROFILES]
                 document["view"]["active_sequence"] = tracked[PROFILES[0][0]]["item"]
                 document["project"]["name"] = event_metadata.get("event_name") or canonical.stem
@@ -457,6 +484,7 @@ class FilmcraftService:
                                         "project_hash": hashlib.sha256(target.read_bytes()).hexdigest(),
                                         "input_signature": input_signature(), "capture_timezone": event_metadata.get("capture_timezone"),
                                         "assets": {a["relative"]: a for a in active},
+                                        "timeline_signature": timeline_signature,
                                         "timelines": tracked, "summary": asdict(summary)})
                 emit("FilmCraft preparation complete.")
             finally:
@@ -474,7 +502,7 @@ class FilmcraftService:
         starts = {}; cursor = 0
         for asset in assets:
             info = _media(project["items"][str(asset["item"])])["info"]
-            duration = 3 * TICKS if asset["kind"] == "photo" else int(info["duration"])
+            duration = int(info["duration"])
             starts[asset["item"]] = (cursor, duration)
             cursor += duration
         for track in sequence["video_tracks"] + sequence["audio_tracks"]:
