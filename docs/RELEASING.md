@@ -235,6 +235,25 @@ version/tag and Release URL if published, checks and workflow status, and any
 unperformed smoke test or remaining approval. For staff publication, verify
 that the public latest-feed and asset URLs resolve before declaring success.
 
+## Local release files and rollback
+
+Use GitHub tags for released source and GitHub Releases for published installers.
+Once the tag, installer, checksum, and signed appcast are verified on GitHub,
+avoid keeping full local copies of old app bundles, installers, build directories,
+or release checkouts solely for rollback. Reuse the normal build and staging
+directories for each release.
+
+When reviewing disk usage, verify the remote copies first. Move confirmed
+obsolete ECC artifacts to the ignored `dist/delete me/` folder for the user to
+review, preserving their original paths inside it. Report the total size and
+leave deletion to the user. Keep the installed app, current build, working
+source, and anything with unique local data, including event media, catalogs,
+settings, credentials, and signing material.
+
+For a manual rollback, use the older installer from GitHub Releases. For a
+Sparkle rollback, build the older source as a newer version and publish a signed
+update after explicit staff release authorization.
+
 ## Authentication and permission troubleshooting
 
 Project defaults live in `.codex/config.toml`: workspace-write, on-request

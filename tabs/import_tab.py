@@ -885,7 +885,7 @@ class ImportTab(ttk.Frame):
                 event_folder, self.project_service.filmcraft_project_path(event_folder, self.event_name_var.get()),
                 newly_created=project_summary.filmcraft_created,
                 progress_callback=lambda p: self.worker_queue.put(("stage_progress", p.message)),
-            ) if not summary.cancelled and summary.imported_sources else FilmcraftSummary()
+            ) if not summary.cancelled and summary.videos_imported else FilmcraftSummary()
             if self.scan_result is not None:
                 ImportCheckService().finalize(self.scan_result, files, summary, jpg_summary, event_folder,
                                              project_summary.failures + filmcraft.failures + filmcraft.proxy_problems)
@@ -1110,7 +1110,7 @@ class ImportTab(ttk.Frame):
             f"{lightcraft_text}"
             f"Premiere Project:\n{premiere_text}\n"
             f"Filmcraft Project:\n{filmcraft_text}\n"
-            f"FilmCraft library: {filmcraft.videos} videos, {filmcraft.photos} photos\n"
+            f"FilmCraft library: {filmcraft.videos} videos\n"
             f"Proxies linked: {filmcraft.proxies_linked}; problems: {len(filmcraft.proxy_problems)}\n"
             f"Timelines created/updated: {filmcraft.timelines_created}/{filmcraft.timelines_updated}\n"
             f"Prepared project: {filmcraft.project_path}\n"

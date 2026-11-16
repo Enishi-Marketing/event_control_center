@@ -70,9 +70,6 @@ class FilmcraftIntegrationTests(unittest.TestCase):
         image = Image.new("RGB", (800, 600), "red")
         exif = Image.Exif(); exif[36867] = "2026:11:05 10:02:30"; exif[36881] = "+09:00"
         image.save(cls.fixtures / "photo.jpg", exif=exif)
-        image = Image.new("RGB", (120, 80), "green")
-        exif = Image.Exif(); exif[274] = 6
-        image.save(cls.fixtures / "oriented.jpg", exif=exif)
         from_pillow(Image.new("RGB", (160, 120), "yellow")).save(cls.fixtures / "photo.HEIC")
 
     @classmethod
@@ -141,11 +138,11 @@ class FilmcraftIntegrationTests(unittest.TestCase):
         result = self.prepare()
         self.assertEqual(result.failures, [])
         self.assertEqual(result.proxy_problems, [])
-        self.assertEqual((result.videos, result.photos, result.proxies_linked, result.timelines_created), (2, 2, 2, 3))
-        self.assertEqual(result.intermediate_photos, 1)
+        self.assertEqual((result.videos, result.photos, result.proxies_linked, result.timelines_created), (2, 0, 2, 3))
+        self.assertEqual(result.intermediate_photos, 0)
         doc = self.document(result)
         media = {int(k): v for k, v in doc["project"]["items"].items() if "Media" in v["kind"]}
-        self.assertEqual(len(media), 4)
+        self.assertEqual(len(media), 2)
         sequences = {v["name"]: v["kind"]["Sequence"] for v in doc["project"]["items"].values() if "Sequence" in v["kind"]}
         self.assertEqual(set(sequences), {p[0] for p in PROFILES})
         videos = [key for key, item in media.items() if item["metadata"]["Original File"].startswith("Raw/Videos/")]
@@ -172,16 +169,6 @@ class FilmcraftIntegrationTests(unittest.TestCase):
         self.client.validate(Path(result.project_path), self.root / "cli-data")
         for path, digest in originals.items():
             self.assertEqual(hashlib.sha256(path.read_bytes()).digest(), digest)
-
-    def test_photo_only_event_keeps_photo_in_library_and_timelines_empty(self):
-        self.media("photo.jpg")
-        result = self.prepare()
-        self.assertEqual(result.failures, [])
-        self.assertEqual((result.photos, result.videos, result.timelines_created), (1, 0, 3))
-        items = self.document(result)["project"]["items"].values()
-        self.assertTrue(any(item["name"] == "photo.jpg" and "Media" in item["kind"] for item in items))
-        for sequence in (item["kind"]["Sequence"] for item in items if "Sequence" in item["kind"]):
-            self.assertFalse(any(track["items"] for track in sequence["video_tracks"] + sequence["audio_tracks"]))
 
     def test_legacy_project_is_refreshed_alongside_premiere(self):
         self.media("landscape.mp4")
@@ -231,14 +218,11 @@ class FilmcraftIntegrationTests(unittest.TestCase):
             bounds = ImageChops.difference(rgb, Image.new("RGB", rgb.size)).getbbox()
             self.assertAlmostEqual((bounds[2] - bounds[0]) / (bounds[3] - bounds[1]), 360/640, delta=0.01)
 
-    def test_exif_orientation_and_anamorphic_display_aspect(self):
-        self.media("oriented.jpg")
+    def test_anamorphic_display_aspect(self):
         self.media("anamorphic.mp4")
         result = self.prepare()
         self.assertEqual(result.failures, [])
         doc = self.document(result)
-        photo = next(v for v in doc["project"]["items"].values() if v.get("name") == "oriented.jpg")
-        self.assertEqual((photo["kind"]["Media"]["info"]["video"]["width"], photo["kind"]["Media"]["info"]["video"]["height"]), (80, 120))
         square = next(v["kind"]["Sequence"] for v in doc["project"]["items"].values() if v["name"] == "Square - 1x1")
         clip = next(c for c in square["video_tracks"][0]["items"] if c["name"] == "anamorphic.mp4")
         motion = next(e for e in clip["effects"] if e["effect"] == "motion")
@@ -294,24 +278,20 @@ class FilmcraftIntegrationTests(unittest.TestCase):
         self.assertTrue(again.unchanged)
         self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
         self.assertEqual((again.timelines_created, again.timelines_updated), (0, 0))
-        self.assertEqual(len([v for v in self.document(again)["project"]["items"].values() if "Media" in v["kind"]]), 2)
+        self.assertEqual(len([v for v in self.document(again)["project"]["items"].values() if "Media" in v["kind"]]), 1)
 
-    def test_photo_only_refresh_reuses_proxy_and_timelines_in_a_recoverable_project(self):
+    def test_adding_photos_does_not_rewrite_project_or_start_engine(self):
         self.media("landscape.mp4")
         first = self.prepare()
-        original_bytes = Path(first.project_path).read_bytes()
-        self.media("photo.jpg")
-        with patch.object(self.client, "run", wraps=self.client.run) as run:
+        path = Path(first.project_path)
+        before = path.read_bytes(), path.stat().st_mtime_ns
+        for index in range(150):
+            shutil.copy2(self.fixtures / "photo.HEIC", self.event / "Raw" / "Photos" / f"{index}.HEIC")
+        with patch.object(self.client, "_call", wraps=self.client._call) as call:
             second = self.service.prepare(self.event, self.project)
-        commands = {step["id"] for call in run.call_args_list for step in call.args[1]}
-        self.assertTrue({"timeline.place", "media.attachProxies"}.isdisjoint(commands))
-        self.assertEqual(second.failures + second.proxy_problems, [])
-        self.assertEqual(second.proxies_linked, 1)
-        self.assertNotEqual(second.project_path, first.project_path)
-        self.assertEqual(Path(first.project_path).read_bytes(), original_bytes)
-        self.assertEqual((second.timelines_created, second.timelines_updated), (0, 0))
-        self.assertEqual(len([v for v in self.document(second)["project"]["items"].values() if "Media" in v["kind"]]), 2)
-        self.assertTrue(self.service.prepare(self.event, self.project).unchanged)
+        call.assert_not_called()
+        self.assertTrue(second.unchanged)
+        self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
 
     def test_manual_sequences_and_edited_generated_timeline_are_preserved(self):
         self.media("landscape.mp4")
@@ -345,7 +325,7 @@ class FilmcraftIntegrationTests(unittest.TestCase):
         rows = self.client._call(["--project", str(project), "exec", "media.findMissing"], self.root / "cli-data")
         self.assertEqual(rows.returncode, 0, rows.stderr)
         self.assertEqual(json.loads(rows.stdout)["missing"], [])
-        self.assertEqual(result.intermediate_photos, 1)
+        self.assertEqual(result.intermediate_photos, 0)
 
     def test_all_original_audio_streams_remain_synchronized(self):
         self.media("two-audio.mp4")
@@ -379,16 +359,6 @@ class FilmcraftIntegrationTests(unittest.TestCase):
         self.client.validate(Path(result.project_path), self.root / "cli-data")
         self.assertEqual(bad.read_bytes(), b"damaged original")
 
-    def test_lost_photo_intermediate_can_be_repaired(self):
-        self.media("photo.HEIC")
-        first = self.prepare()
-        intermediate = next((self.event / "Data" / "FilmCraft" / "Photo Intermediates").glob("*.png"))
-        intermediate.unlink()
-        result = self.service.prepare(self.event, self.project)
-        self.assertEqual(result.failures, [])
-        self.assertTrue(intermediate.exists())
-        self.assertEqual(len([v for v in self.document(result)["project"]["items"].values() if "Media" in v["kind"]]), 1)
-
     def test_renamed_original_keeps_stable_asset_id_without_duplicate(self):
         path = self.media("landscape.mp4")
         self.prepare()
@@ -418,25 +388,28 @@ class FilmcraftIntegrationTests(unittest.TestCase):
         result = self.service.prepare(self.event, self.project)
         self.assertEqual(result.failures, [])
         media = [v for v in self.document(result)["project"]["items"].values() if "Media" in v["kind"]]
-        self.assertEqual(len(media), 2)
+        self.assertEqual(len(media), 1)
 
-    def test_changed_photo_intermediate_is_preserved_and_repaired_in_new_version(self):
-        self.media("photo.HEIC")
+    def test_refresh_preserves_an_existing_photo_even_if_its_source_is_missing(self):
+        self.media("landscape.mp4")
+        photo = self.media("photo.jpg")
         first = self.prepare()
-        intermediate = next((self.event / "Data" / "FilmCraft" / "Photo Intermediates").glob("*.png"))
-        intermediate.write_bytes(b"changed representation")
-        original_project = Path(first.project_path).read_bytes()
-        result = self.service.prepare(self.event, self.project)
-        self.assertEqual(result.failures, [])
-        self.assertEqual(intermediate.read_bytes(), b"changed representation")
-        self.assertEqual(Path(first.project_path).read_bytes(), original_project)
-        self.assertTrue(result.warnings)
-        self.assertEqual(result.intermediate_photos, 1)
+        project = Path(first.project_path)
+        rows = self.client.run(project, [{"id": "file.import", "params": {"paths": [str(photo)], "imageSequence": False}}], self.root / "cli-data")
+        item_id = str(rows[0]["result"]["items"][0])
+        state_path = self.event / "Data" / "FilmCraft" / "assembly.json"
+        state = json.loads(state_path.read_text())
+        state["assets"]["Raw/Photos/photo.jpg"] = {"item": int(item_id), "kind": "photo"}
+        state_path.write_text(json.dumps(state))
+        photo.unlink()
+        refreshed = self.service.prepare(self.event, self.project)
+        self.assertEqual(refreshed.failures, [])
+        self.assertEqual(self.document(refreshed)["project"]["items"][item_id]["name"], "photo.jpg")
 
     def test_project_saved_during_preparation_is_not_replaced_or_published_from_stale_snapshot(self):
         self.media("landscape.mp4")
         first = self.prepare()
-        self.media("photo.jpg")
+        self.media("portrait.mp4")
         state_path = self.event / "Data" / "FilmCraft" / "assembly.json"
         old_state = state_path.read_bytes()
         validate = self.client.validate

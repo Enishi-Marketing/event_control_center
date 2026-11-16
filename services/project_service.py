@@ -73,7 +73,7 @@ class ProjectService:
                 )
             except Exception as exc:
                 summary.failures.append(f"Premiere project: {exc}")
-        if has_photos or has_videos:
+        if has_videos:
             try:
                 summary.filmcraft_created, summary.filmcraft_skipped = self.create_filmcraft_project(event_folder, clean_name)
             except Exception as exc:

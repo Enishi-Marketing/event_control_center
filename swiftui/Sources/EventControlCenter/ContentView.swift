@@ -15,34 +15,51 @@ struct ContentView: View {
             .listStyle(.sidebar)
             .navigationTitle("Control Center")
         } detail: {
-            Group {
-                switch selection ?? .import {
-                case .import: ImportView()
-                case .search: SearchView()
-                case .utilities: UtilitiesView()
-                case .metadata: MetadataView()
-                case .heroLibrary: HeroLibraryView()
-                case .settings: SettingsView()
+            VStack(spacing: 0) {
+                Group {
+                    switch selection ?? .import {
+                    case .import: ImportView()
+                    case .search: SearchView()
+                    case .utilities: UtilitiesView()
+                    case .metadata: MetadataView()
+                    case .heroLibrary: HeroLibraryView()
+                    case .settings: SettingsView()
+                    }
                 }
-            }
-            .frame(minWidth: 780)
-            .overlay(alignment: .bottom) {
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if let notice = app.notice {
                     Label(notice, systemImage: "checkmark.circle.fill")
                         .font(.subheadline)
                         .padding(.horizontal, 14).padding(.vertical, 10)
                         .background(.regularMaterial, in: Capsule())
-                        .padding(20)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 8)
                 }
             }
+            .frame(minWidth: 780)
         }
-        .alert("Event Control Center", isPresented: Binding(
+        .sheet(isPresented: Binding(
             get: { app.errorMessage != nil },
             set: { if !$0 { app.errorMessage = nil } }
         )) {
-            Button("OK", role: .cancel) { app.errorMessage = nil }
-        } message: {
-            Text(app.errorMessage ?? "")
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Event Control Center", systemImage: "exclamationmark.triangle")
+                    .font(.headline)
+                ScrollView {
+                    Text(app.errorMessage ?? "")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: 240)
+                Divider()
+                HStack {
+                    Spacer()
+                    Button("OK", role: .cancel) { app.errorMessage = nil }
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(20)
+            .frame(width: 480)
         }
         .onChange(of: app.configuration?.multimediaEventsRoot) { _, root in
             if root?.isEmpty == true { selection = .settings }
@@ -542,7 +559,7 @@ struct ImportView: View {
         }) {
             app.notice = "Imported \(outcome.photosImported) photos and \(outcome.videosImported) videos. Generated \(outcome.jpgsGenerated) JPGs and \(outcome.socialVideosGenerated) smaller video copies."
             lastImportCheck = outcome.check
-            lastFilmcraftResult = outcome.filmcraft
+            lastFilmcraftResult = outcome.videosImported > 0 ? outcome.filmcraft : nil
             lastLightcraftPath = outcome.lightcraftPath
             let warnings = (outcome.check?.warnings ?? []) + outcome.failures
             if !warnings.isEmpty {

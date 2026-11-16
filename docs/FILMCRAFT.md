@@ -1,24 +1,23 @@
 # FilmCraft event preparation
 
-ECC prepares FilmCraft projects after original media has been copied and verified,
-Smaller Videos are available, browsing JPGs have been generated, and editing
-project files have been created. This works for photo-only events and for adding
-media to an existing event. Both project files live in the event’s Premiere
-Project folder. Photo-only events get a FilmCraft project there without a
-Premiere project file.
+ECC prepares FilmCraft projects for video imports after the originals have been
+copied and verified and Smaller Videos are available. The FilmCraft project
+lives in the event’s Premiere Project folder.
 
-The native Import page shows preparation progress and the final video, photo,
-proxy, problem, and timeline counts. **Utilities → FilmCraft assemblies →
+The native Import page shows preparation progress and the final video, proxy,
+problem, and timeline counts. **Utilities → FilmCraft assemblies →
 Prepare / repair FilmCraft** repeats preparation from an existing event without
 reimporting camera files. The backend commands are `prepare_filmcraft` and
 `prepare_filmcraft_stream`, with an `event_folder` payload.
 
 ## Media and proxies
 
-Originals come only from `Raw/Videos` and `Raw/Photos`. The media library has
-Media/Videos, Media/Photos, and Timelines bins. Photos are available in
-Media/Photos for manual editing. All three generated timelines share the same
+ECC only scans `Raw/Videos` for FilmCraft. All three timelines share the same
 video source assets. Proxies never appear as independent footage.
+
+Use **Open event photos** on the FilmCraft result to browse `Raw/Photos` in
+Finder. Import individual photos into FilmCraft when you need them. ECC
+preserves photo items and intermediate files already used by older projects.
 
 Video media references point at the originals. Proxies use the exact mapping
 implemented by `SocialVideoService.destination_for`, including names such as
@@ -47,33 +46,10 @@ These fast fingerprints identify FilmCraft assets and proxies. They do **not**
 replace original-import SHA-256 verification or the full source/archive hash
 comparison required immediately before source cleanup.
 
-## Photos requiring an intermediate
-
-The tested FilmCraft 0.17.1 engine cannot decode HEIC directly. When its native
-decoder cannot read a photo, ECC creates a lossless, full-resolution PNG under
-`Data/FilmCraft/Photo Intermediates`. It respects EXIF orientation and retains the
-ICC profile where available. On macOS, camera formats Pillow cannot decode are
-tried through the system's full-resolution TIFF conversion first.
-
-This uses neither the smaller browsing JPG nor its brightness adjustment. PNG
-stores the decoder-rendered pixels losslessly, but this is not a bit-for-bit RAW
-or HDR representation: the current HEIF/Pillow fallback renders 10/12-bit HDR
-photos to 8-bit. Original high-bit-depth/HDR files remain unchanged in Raw/Photos.
-The
-project's editable photo record references the full-resolution intermediate;
-the original filename and event-relative source path remain in the supported
-FilmCraft metadata fields and ECC's asset mapping. The original stays in
-`Raw/Photos`. The UI reports the number of intermediate photos.
-
-A format neither FilmCraft nor the available photo decoders can read is reported
-individually. Other readable media still gets a valid project. Full-resolution
-PNG intermediates can require substantially more disk space than HEIC originals.
-This does not add support for unsupported camera codecs to FilmCraft itself.
-
 ## Chronology, timing, and scaling
 
 Video dates come from the original container's QuickTime recording/creation
-metadata. Photos prefer EXIF DateTimeOriginal, then equivalent EXIF dates. Embedded
+metadata. Embedded
 offsets are converted to UTC. If a timestamp has no offset, an optional
 `capture_timezone` IANA timezone in `Data/metadata.json` is used, otherwise the Mac's
 local timezone is assumed and reported. Invalid metadata falls back to ECC import
@@ -91,8 +67,7 @@ The generated timelines are:
 
 They default to 30 fps; an optional `filmcraft_frame_rate` in event metadata can
 select a supported rate between 1 and 240 fps. All three contain the readable
-event videos in the same capture order, starting at zero. Photo-only events have
-empty timelines. Video and linked audio use the original engine-probed duration
+event videos in the same capture order, starting at zero. Video and linked audio use the original engine-probed duration
 in exact 254,016,000,000-per-second ticks, including fractional sequence-frame durations.
 Extra original audio streams get synchronized linked clips on additional tracks.
 
@@ -138,9 +113,7 @@ The desktop editor does not share the CLI's save lock, which is why ECC creates
 refreshed project files rather than externally saving over working edits.
 
 Missing originals retain their existing media references and are reported.
-Missing proxies never remove originals. Missing generated photo intermediates can
-be rebuilt. Changed intermediates are preserved and a fresh representation is
-used for the refreshed assembly. A newer/unknown project schema is refused safely.
+Missing proxies never remove originals. A newer/unknown project schema is refused safely.
 
 Managed media paths and the asset mapping are event-relative, so moving the event
 between local storage and another Drive mount does not require a staff username

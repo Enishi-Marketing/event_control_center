@@ -19,6 +19,8 @@ struct HeroLibraryView: View {
     @State private var query = ""
     @State private var info = ""
     @State private var uncatalogued: [String] = []
+    @State private var sectionReview = false
+    @State private var uncataloguedReviewFiles: [String] = []
     @State private var showSettings = false
     @State private var showLightroomSetup = false
     @State private var chooseFolder = false
@@ -55,19 +57,31 @@ struct HeroLibraryView: View {
     private let categories = ["Learning", "Community", "Sports", "Arts", "Campus", "Events", "Portrait"]
     private let browseGroups = ["Students", "Teachers & Staff", "Campus", "Community"]
 
+    private func needsSectionReview(_ asset: HeroAsset) -> Bool {
+        guard let root = app.configuration?.heroPublishRoot, !root.isEmpty else { return false }
+        let rootPath = URL(fileURLWithPath: root).standardizedFileURL.pathComponents
+        return [asset.masterPath, asset.webPath, asset.matchedLibraryPath].compactMap { $0 }.contains { path in
+            let components = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+            return ["MASTER", "WEB"].contains { kind in
+                components.starts(with: rootPath + [kind, "Students", "Section To Review"])
+            }
+        }
+    }
+
     private var visible: [HeroAsset] {
         let filtered = assets.filter { asset in
             let inTab: Bool
             switch tab {
             case .organize:
-                inTab = asset.removedAt == nil && asset.matchedLibraryPath == nil &&
+                inTab = asset.removedAt == nil && asset.matchedLibraryPath == nil && asset.heroTagRemoved != true &&
                     ["UNREVIEWED", "NEEDS_EDIT", "APPROVED_AS_IS"].contains(asset.editState)
             case .lightroom:
                 inTab = asset.removedAt == nil && asset.matchedLibraryPath == nil &&
                     ["IN_LIGHTROOM", "READY_TO_PUBLISH"].contains(asset.editState)
             case .library:
                 inTab = asset.removedAt == nil &&
-                    (asset.editState == "PUBLISHED" || asset.matchedLibraryPath != nil)
+                    (asset.editState == "PUBLISHED" || asset.matchedLibraryPath != nil) &&
+                    (!sectionReview || needsSectionReview(asset))
             case .featured: inTab = asset.removedAt == nil && asset.featured
             case .removed: inTab = asset.removedAt != nil
             }
@@ -90,6 +104,9 @@ struct HeroLibraryView: View {
     }
 
     private var selectedAssets: [HeroAsset] { assets.filter { selected.contains($0.assetId) } }
+    private var selectedFinderTagIDs: [String] {
+        selectedAssets.filter { $0.sourceKind == "FINDER_TAG" && $0.heroTagRemoved != true }.map(\.assetId)
+    }
     private var singleAsset: HeroAsset? { selectedAssets.count == 1 ? selectedAssets.first : nil }
     private var readyAssets: [HeroAsset] {
         assets.filter { $0.removedAt == nil && $0.matchedLibraryPath == nil &&
@@ -156,7 +173,11 @@ struct HeroLibraryView: View {
                     }
                     ScrollView {
                         VStack(alignment: .leading, spacing: 16) {
-                            if !uncatalogued.isEmpty { staffAdditionsCard }
+                            if tab == .library && sectionReview {
+                                if !uncataloguedReviewFiles.isEmpty { sectionReviewFilesCard }
+                            } else if !uncatalogued.isEmpty {
+                                staffAdditionsCard
+                            }
                             if visible.isEmpty {
                                 ContentUnavailableView(
                                     query.isEmpty ? "No photos in this view" : "No matching photos",
@@ -289,7 +310,8 @@ struct HeroLibraryView: View {
                     }
                     Spacer()
                     if asset.featured { Image(systemName: "star.fill").foregroundStyle(.yellow) }
-                    Text(asset.editState == "PUBLISHED" ? "On Drive" :
+                    Text(tab == .library && needsSectionReview(asset) ? "Section to review" :
+                         asset.editState == "PUBLISHED" ? "On Drive" :
                          asset.matchedLibraryPath != nil ? "Already on Drive" :
                          asset.editState == "READY_TO_PUBLISH" ? "Export ready" :
                          asset.editState == "IN_LIGHTROOM" ? "In Lightroom" :
@@ -338,6 +360,12 @@ struct HeroLibraryView: View {
                     .buttonStyle(.borderedProminent)
             } else {
                 if tab == .organize {
+                    Button("Remove Hero Shot tag", systemImage: "tag.slash") {
+                        let ids = selectedFinderTagIDs
+                        Task { await untagSelected(ids) }
+                    }
+                    .disabled(selectedFinderTagIDs.isEmpty)
+                    .help("Remove the Hero Shot Finder tag from the selected originals.")
                     Button("Send selected to Lightroom", systemImage: "arrow.right") { Task { await stage(Array(selected)) } }
                         .disabled(selectedAssets.contains { $0.needsEditPath == nil })
                         .help("Stage photos locally before sending them to Lightroom.")
@@ -401,7 +429,8 @@ struct HeroLibraryView: View {
     }
 
     private var queuedIDs: [String] {
-        assets.filter { $0.removedAt == nil && $0.matchedLibraryPath == nil && $0.editState == "NEEDS_EDIT" && $0.needsEditPath != nil }.map(\.assetId)
+        assets.filter { $0.removedAt == nil && $0.matchedLibraryPath == nil && $0.heroTagRemoved != true &&
+            $0.editState == "NEEDS_EDIT" && $0.needsEditPath != nil }.map(\.assetId)
     }
 
     private var emptyMessage: String {
@@ -409,7 +438,8 @@ struct HeroLibraryView: View {
         switch tab {
         case .organize: return "Scan Finder’s Hero Shot tags, then stage a small batch to review."
         case .lightroom: return "Send queued photos to Lightroom. Check exports when your edits are finished."
-        case .library: return "Your published photos and existing Drive matches appear here."
+        case .library: return sectionReview ? "No catalogued photos are awaiting section review." :
+            "Your published photos and existing Drive matches appear here."
         case .featured: return "Feature selected photos to keep your best images together."
         case .removed: return "Removed photos appear here and can be restored."
         }
@@ -451,7 +481,20 @@ struct HeroLibraryView: View {
                 Button("Open Lightroom", systemImage: "camera.aperture") { Task { await openCatalog() } }
             }
         case .library:
-            Button("Review staff additions", systemImage: "person.crop.rectangle.stack") { Task { await auditDrive() } }
+            HStack {
+                Button(sectionReview ? "Show all photos" : "Section To Review", systemImage: "folder") {
+                    sectionReview.toggle()
+                    selected = []
+                    query = ""
+                    info = ""
+                    if sectionReview { Task { await loadSectionReview() } }
+                }
+                if sectionReview {
+                    Button("Refresh review", systemImage: "arrow.clockwise") { Task { await loadSectionReview() } }
+                } else {
+                    Button("Review staff additions", systemImage: "person.crop.rectangle.stack") { Task { await auditDrive() } }
+                }
+            }
         case .featured:
             Label("Your selected highlights", systemImage: "star").foregroundStyle(.secondary)
         case .removed:
@@ -492,6 +535,32 @@ struct HeroLibraryView: View {
                 }.font(.caption)
             }
         }.padding(16).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var sectionReviewFilesCard: some View {
+        let files = uncataloguedReviewFiles.filter { query.isEmpty || $0.localizedCaseInsensitiveContains(query) }
+        return DisclosureGroup("Uncatalogued review files · \(files.count)") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("ECC needs a catalog entry and a MASTER to organize these files.")
+                    .foregroundStyle(.secondary)
+                ForEach(files, id: \.self) { path in
+                    HStack {
+                        Text(path).lineLimit(1).help(path)
+                        Spacer()
+                        Button("Show in Finder") {
+                            guard let root = app.configuration?.heroPublishRoot else { return }
+                            NSWorkspace.shared.activateFileViewerSelecting([
+                                URL(fileURLWithPath: root).appendingPathComponent(path)
+                            ])
+                        }
+                    }
+                }
+            }
+            .font(.caption)
+            .padding(.top, 8)
+        }
+        .padding(16)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var lightroomSetupSheet: some View {
@@ -635,6 +704,9 @@ struct HeroLibraryView: View {
     private func update(_ changes: [String: HeroValue]) async {
         if let result = await app.heroUpdate(ids: Array(selected), changes: changes) {
             assets = result.assets
+            if tab == .library && sectionReview {
+                selected.formIntersection(assets.filter(needsSectionReview).map(\.assetId))
+            }
             guard !changes.isEmpty else { return }
             var message = "Saved metadata"
             if result.metadataEmbedded > 0 {
@@ -723,6 +795,14 @@ struct HeroLibraryView: View {
                 "Found \(result.count) photos added directly to Drive. Review them below; ECC has not moved or downloaded them."
         }
     }
+    private func loadSectionReview() async {
+        if let refreshed = await app.heroList() { assets = refreshed }
+        if let result = await app.heroAuditDrive(sectionReview: true) {
+            uncataloguedReviewFiles = result.uncatalogued
+        }
+        selected.formIntersection(assets.filter(needsSectionReview).map(\.assetId))
+        info = "Select photos, then use Edit metadata → Sections → Apply metadata & organize."
+    }
     private func adoptDrive(_ path: String) async {
         if let result = await app.heroAdoptDrive(path: path) {
             assets = result.assets
@@ -733,6 +813,17 @@ struct HeroLibraryView: View {
             info = "Added \(path) to the Hero inbox. Select it to add metadata, send it to Lightroom, or publish the original if it needs no edit. Clear Search to see the full inbox."
         }
     }
+    private func untagSelected(_ ids: [String]) async {
+        if let result = await app.heroUntag(ids: ids) {
+            assets = result.assets
+            selected.subtract(result.assets.filter { $0.heroTagRemoved == true }.map(\.assetId))
+            info = "Removed the Hero Shot tag from \(result.untagged) photos."
+            if !result.errors.isEmpty {
+                app.errorMessage = result.errors.joined(separator: "\n")
+            }
+        }
+    }
+
     private func removeSelected() async {
         if let result = await app.heroRemove(ids: Array(selected)) {
             assets = result

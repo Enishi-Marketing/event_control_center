@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import ctypes
+import errno
 import json
 import os
 import plistlib
@@ -81,6 +82,7 @@ class HeroLibraryService:
                 asset_id TEXT UNIQUE, source_path TEXT NOT NULL UNIQUE,
                 source_size INTEGER, event_photo_number INTEGER,
                 source_kind TEXT NOT NULL DEFAULT 'FINDER_TAG',
+                hero_tag_removed INTEGER NOT NULL DEFAULT 0,
                 original_filename TEXT NOT NULL, event_folder TEXT, event_name TEXT,
                 event_date TEXT, school_year TEXT, event_id TEXT NOT NULL DEFAULT '',
                 event_description TEXT NOT NULL DEFAULT '',
@@ -111,6 +113,7 @@ class HeroLibraryService:
                 "removed_manifest": "TEXT NOT NULL DEFAULT '[]'",
                 "browse_group": "TEXT NOT NULL DEFAULT ''",
                 "source_kind": "TEXT NOT NULL DEFAULT 'FINDER_TAG'",
+                "hero_tag_removed": "INTEGER NOT NULL DEFAULT 0",
                 "source_size": "INTEGER",
                 "event_photo_number": "INTEGER",
             }
@@ -294,13 +297,17 @@ class HeroLibraryService:
                     elif event_folder:
                         db.execute("""UPDATE assets SET event_folder=?, event_name=?, event_date=?,
                             school_year=?, event_id=?, event_description=?, event_grades=?,
-                            event_sections=?, event_keywords=?, source_size=?, matched_library_path=?, updated_at=?
+                            event_sections=?, event_keywords=?, source_size=?, matched_library_path=?,
+                            hero_tag_removed=0, updated_at=?
                             WHERE source_path=?""",
                             (event_folder, str(event.get("event_name", "")), str(event.get("date", "")),
                              str(event.get("school_year", "")), str(event.get("event_id") or ""),
                              str(event.get("description") or ""), _json(event_grades),
                              _json(event_sections), _json(event_keywords), source_size,
                              str(library_match) if library_match else None, timestamp, str(path)))
+                    else:
+                        db.execute("UPDATE assets SET hero_tag_removed=0 WHERE source_path=? AND hero_tag_removed=1",
+                                   (str(path),))
             self._assign_event_photo_numbers(db)
         return {"found": found, "added": added, "errors": errors, "assets": self.list_assets()}
 
@@ -310,6 +317,7 @@ class HeroLibraryService:
         for key in ("event_grades", "event_sections", "event_keywords", "grades", "sections", "extra_keywords", "removed_manifest"):
             record[key] = json.loads(record[key])
         record["featured"] = bool(record["featured"])
+        record["hero_tag_removed"] = bool(record["hero_tag_removed"])
         return record
 
     @staticmethod
@@ -481,7 +489,7 @@ class HeroLibraryService:
         workspace = AppConfig.HERO_WORKSPACE_ROOT
         with closing(self._connect()) as db, db:
             rows = db.execute("""SELECT * FROM assets WHERE removed_at IS NULL
-                AND edit_state != 'PUBLISHED' ORDER BY id""").fetchall()
+                AND hero_tag_removed=0 AND edit_state != 'PUBLISHED' ORDER BY id""").fetchall()
             for row in rows:
                 asset = self._record(row)
                 if asset["matched_library_path"]:
@@ -532,7 +540,7 @@ class HeroLibraryService:
                 except (OSError, ValueError) as exc:
                     errors.append(f"{asset['asset_id']}: {exc}")
             pending = db.execute("""SELECT COUNT(*) FROM assets WHERE removed_at IS NULL
-                AND needs_edit_path IS NULL AND matched_library_path IS NULL
+                AND hero_tag_removed=0 AND needs_edit_path IS NULL AND matched_library_path IS NULL
                 AND edit_state != 'PUBLISHED'""").fetchone()[0]
         return {"found": scan["found"], "added": scan["added"], "synced": synced,
                 "skipped": skipped, "pending": pending, "errors": errors,
@@ -552,6 +560,55 @@ class HeroLibraryService:
         if local:
             files.append(local)
         return list(dict.fromkeys(files))
+
+    @staticmethod
+    def _remove_hero_finder_tag(path: Path) -> None:
+        name = "com.apple.metadata:_kMDItemUserTags"
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("The original photo is unavailable.")
+        try:
+            tags = plistlib.loads(HeroLibraryService._read_xattr(path, name))
+        except OSError as exc:
+            if exc.errno in {getattr(errno, "ENOATTR", 93), errno.ENODATA}:
+                return
+            raise
+        if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+            raise ValueError("The original photo has invalid Finder tags.")
+        remaining = [tag for tag in tags if tag.split("\n", 1)[0] != "Hero Shot"]
+        if remaining == tags:
+            return
+        data = plistlib.dumps(remaining, fmt=plistlib.FMT_BINARY)
+        if hasattr(os, "setxattr"):
+            os.setxattr(path, name, data, follow_symlinks=False)
+        else:
+            result = subprocess.run(["/usr/bin/xattr", "-swx", name, data.hex(), str(path)],
+                                    capture_output=True, text=True, timeout=30)
+            if result.returncode:
+                raise OSError(result.stderr.strip() or "Could not write Finder tags.")
+
+    def untag(self, asset_ids: list[str]) -> dict:
+        """Remove the Finder tag and hide successful selections from the inbox."""
+        errors = []
+        untagged = 0
+        with closing(self._connect()) as db:
+            for asset_id in dict.fromkeys(asset_ids):
+                try:
+                    with db:
+                        db.execute("BEGIN IMMEDIATE")
+                        row = db.execute("""SELECT source_path FROM assets WHERE asset_id=?
+                            AND source_kind='FINDER_TAG' AND removed_at IS NULL
+                            AND matched_library_path IS NULL AND hero_tag_removed=0
+                            AND edit_state IN ('UNREVIEWED', 'NEEDS_EDIT', 'APPROVED_AS_IS')""",
+                            (asset_id,)).fetchone()
+                        if row is None:
+                            raise ValueError("Only Finder-tagged photos in To Organize can be untagged.")
+                        self._remove_hero_finder_tag(Path(row["source_path"]))
+                        db.execute("UPDATE assets SET hero_tag_removed=1, updated_at=? WHERE asset_id=?",
+                                   (_now(), asset_id))
+                    untagged += 1
+                except (OSError, ValueError, plistlib.InvalidFileException, subprocess.TimeoutExpired) as exc:
+                    errors.append(f"{asset_id}: {exc}")
+        return {"untagged": untagged, "errors": errors, "assets": self.list_assets()}
 
     def remove(self, asset_ids: list[str]) -> list[dict]:
         if not asset_ids:
@@ -822,7 +879,8 @@ class HeroLibraryService:
         with closing(self._connect()) as db, db:
             for asset_id in asset_ids:
                 row = db.execute("SELECT * FROM assets WHERE asset_id=?", (asset_id,)).fetchone()
-                if row is None or row["removed_at"] or row["edit_state"] == "PUBLISHED" or row["matched_library_path"]:
+                if (row is None or row["removed_at"] or row["hero_tag_removed"]
+                        or row["edit_state"] == "PUBLISHED" or row["matched_library_path"]):
                     raise ValueError(f"Cannot stage {asset_id}.")
                 source = Path(row["source_path"])
                 if not source.is_file():
@@ -861,7 +919,8 @@ class HeroLibraryService:
                 match = ASSET_RE.match(path.name)
                 if not match:
                     continue
-                row = db.execute("SELECT edit_state, export_path, removed_at, matched_library_path FROM assets WHERE asset_id=?", (match.group(1).upper(),)).fetchone()
+                row = db.execute("""SELECT edit_state, export_path, removed_at, matched_library_path
+                    FROM assets WHERE asset_id=? AND hero_tag_removed=0""", (match.group(1).upper(),)).fetchone()
                 if row and not row["removed_at"] and row["edit_state"] in {"IN_LIGHTROOM", "NEEDS_EDIT", "READY_TO_PUBLISH"}:
                     if row["matched_library_path"]:
                         continue
@@ -1245,22 +1304,28 @@ class HeroLibraryService:
             Path(temp_name).unlink(missing_ok=True)
         return {"path": str(root / "Hero_Catalog.json"), "count": len(entries)}
 
-    def audit_drive(self) -> dict:
+    def audit_drive(self, section_review: bool = False) -> dict:
         """Find staff additions by path only; never open or hash Drive photos."""
         root = AppConfig.HERO_PUBLISH_ROOT
         if root.name == "Photo_Library" or not root.is_dir():
             raise ValueError("Choose the new Hero_Shot_Library as the Drive destination.")
         with closing(self._connect()) as db:
-            rows = db.execute("SELECT source_path, source_kind, master_path, web_path FROM assets").fetchall()
+            rows = db.execute("SELECT source_path, source_kind, master_path, web_path, matched_library_path FROM assets").fetchall()
         known = {str(Path(row[key])) for row in rows for key in ("master_path", "web_path") if row[key]}
+        if section_review:
+            known.update(str(Path(row["matched_library_path"])) for row in rows if row["matched_library_path"])
         known.update(str(Path(row["source_path"])) for row in rows if row["source_kind"] == "STAFF_DRIVE")
         found = []
-        for folder, dirs, names in os.walk(root, followlinks=False):
-            dirs[:] = [name for name in dirs if name not in {"_Removed", "_Metadata"} and not name.startswith(".")]
-            for name in names:
-                path = Path(folder) / name
-                if path.suffix.lower() in IMAGE_SUFFIXES and str(path) not in known:
-                    found.append(str(path.relative_to(root)))
+        folders = [root / kind / "Students" / "Section To Review" for kind in ("MASTER", "WEB")] if section_review else [root]
+        for base in folders:
+            if not base.resolve().is_relative_to(root.resolve()):
+                continue
+            for folder, dirs, names in os.walk(base, followlinks=False):
+                dirs[:] = [name for name in dirs if name not in {"_Removed", "_Metadata"} and not name.startswith(".")]
+                for name in names:
+                    path = Path(folder) / name
+                    if path.suffix.lower() in IMAGE_SUFFIXES and str(path) not in known:
+                        found.append(str(path.relative_to(root)))
         return {"uncatalogued": sorted(found, key=str.casefold), "count": len(found)}
 
     def adopt_drive(self, relative_paths: list[str]) -> dict:

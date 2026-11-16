@@ -152,12 +152,13 @@ Source runs can prepare the CLI with
 
 ECC also populates a FilmCraft media library, attaches verified Smaller Videos as
 proxies, and creates **YouTube - 16x9**, **Vertical - 9x16**, and **Square - 1x1**
-chronological video assemblies. Videos fit without cropping or upscaling, and
-photos stay in the media library for manual use. The FilmCraft project is saved
-in the event’s Premiere Project folder. Utilities has **Prepare / repair FilmCraft**
+chronological video assemblies. Videos fit without cropping or upscaling. Use
+**Open event photos** to browse originals and import only the photos you need.
+The FilmCraft project is saved in the event’s Premiere Project folder. Utilities
+has **Prepare / repair FilmCraft**
 for existing events. Edited timelines and working projects are preserved in refreshed
 assemblies. See [FilmCraft preparation](docs/FILMCRAFT.md) for portability,
-photo intermediates, runtime setup, and supported failure handling.
+runtime setup and supported failure handling.
 
 Click a keyword chip to remove it from an event before saving.
 The **Keyword bank** below the keyword field lets you add saved keywords with a

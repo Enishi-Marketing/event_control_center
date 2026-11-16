@@ -56,6 +56,8 @@ struct ConfigSnapshot: Codable {
 struct HeroAsset: Codable, Identifiable {
     let assetId: String
     let sourcePath: String
+    let sourceKind: String?
+    let heroTagRemoved: Bool?
     let originalFilename: String
     let sourceSize: Int?
     let eventPhotoNumber: Int?
@@ -91,6 +93,7 @@ struct HeroAsset: Codable, Identifiable {
 }
 
 struct HeroAssetsResponse: Codable { let assets: [HeroAsset] }
+struct HeroUntagResponse: Codable { let untagged: Int; let errors: [String]; let assets: [HeroAsset] }
 struct HeroUpdateResponse: Codable {
     let assets: [HeroAsset]
     let organized: Int

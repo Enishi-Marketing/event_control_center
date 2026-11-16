@@ -260,7 +260,7 @@ def _import_media(
         event_folder, projects.filmcraft_project_path(event_folder, str(payload.get("event_name", ""))),
         newly_created=created.filmcraft_created,
         progress_callback=(lambda p: progress_callback(ImportProgress(p.current, p.total, message=p.message, phase="Preparing FilmCraft"))) if progress_callback else None,
-    ) if summary.imported_sources else FilmcraftSummary()
+    ) if summary.videos_imported else FilmcraftSummary()
     preparation_failures = created.failures + filmcraft.failures + filmcraft.proxy_problems
     check = ImportCheckService().finalize(scan, selected_files, summary, jpg_summary, event_folder, preparation_failures)
     return {
@@ -364,7 +364,7 @@ def _stream_import_media(payload: dict[str, Any]) -> None:
         )
         has_photos = summary.photos_imported > 0
         has_videos = summary.videos_imported > 0
-        project_estimate = int(has_photos) + int(has_videos) + int(has_photos or has_videos)
+        project_estimate = int(has_photos) + int(has_videos) + int(has_videos)
         overall_total = max(import_count + jpeg_estimate + project_estimate, 1)
         jpg_summary = jpg_service.generate_for_event(
             event_folder,
@@ -398,7 +398,7 @@ def _stream_import_media(payload: dict[str, Any]) -> None:
         filmcraft = FilmcraftService().prepare(
             event_folder, ProjectService().filmcraft_project_path(event_folder, str(payload.get("event_name", ""))),
             newly_created=project_summary.filmcraft_created, progress_callback=filmcraft_progress,
-        ) if has_photos or has_videos else FilmcraftSummary()
+        ) if has_videos else FilmcraftSummary()
         preparation_failures = project_summary.failures + filmcraft.failures + filmcraft.proxy_problems
         check = ImportCheckService().finalize(scan, selected_files, summary, jpg_summary, event_folder, preparation_failures)
         outcome = {
@@ -642,6 +642,7 @@ def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
             values.get("asset_ids", []), values.get("changes", {})
         ),
         "hero_remove": lambda values: {"assets": HeroLibraryService().remove(values.get("asset_ids", []))},
+        "hero_untag": lambda values: HeroLibraryService().untag(values.get("asset_ids", [])),
         "hero_restore": lambda values: {"assets": HeroLibraryService().restore(values.get("asset_ids", []))},
         "hero_stage": lambda values: {"assets": HeroLibraryService().stage(values.get("asset_ids", []))},
         "hero_match_exports": lambda _values: HeroLibraryService().match_exports(),
@@ -650,7 +651,7 @@ def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         "hero_push_originals": lambda values: HeroLibraryService().push_originals(values.get("asset_ids", [])),
         "hero_rename_published": lambda values: HeroLibraryService().rename_published(bool(values.get("dry_run", False))),
         "hero_reorganize": lambda values: HeroLibraryService().reorganize_published(values.get("asset_ids")),
-        "hero_audit_drive": lambda _values: HeroLibraryService().audit_drive(),
+        "hero_audit_drive": lambda values: HeroLibraryService().audit_drive(section_review=bool(values.get("section_review"))),
         "hero_adopt_drive": lambda values: HeroLibraryService().adopt_drive(values.get("paths", [])),
         "hero_save_settings": _save_hero_settings,
     }

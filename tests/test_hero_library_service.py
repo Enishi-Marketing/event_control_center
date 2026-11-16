@@ -176,6 +176,28 @@ class HeroLibraryTests(unittest.TestCase):
         subprocess.run(["xattr", "-wx", "com.apple.metadata:_kMDItemUserTags", plist.hex(), str(self.photo)], check=True)
         self.assertEqual(HeroLibraryService._finder_tags(self.photo), ["Hero Shot", "Review"])
 
+    def test_untag_preserves_other_finder_tags_and_retagging_restores_the_inbox_entry(self):
+        name = "com.apple.metadata:_kMDItemUserTags"
+        tags = ["Hero Shot\n6", "Review\n2"]
+        subprocess.run(["xattr", "-wx", name, plistlib.dumps(tags).hex(), str(self.photo)], check=True)
+        original = self.photo.read_bytes()
+        asset_id = self.service.scan()["assets"][0]["asset_id"]
+
+        result = self.service.untag([asset_id, "missing"])
+        self.assertEqual(result["untagged"], 1)
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertTrue(result["assets"][0]["hero_tag_removed"])
+        self.assertEqual(plistlib.loads(self.service._read_xattr(self.photo, name)), ["Review\n2"])
+        self.assertEqual(self.photo.read_bytes(), original)
+        self.assertEqual(self.service.refresh()["pending"], 0)
+        with self.assertRaisesRegex(ValueError, "Cannot stage"):
+            self.service.stage([asset_id])
+
+        subprocess.run(["xattr", "-wx", name, plistlib.dumps(tags).hex(), str(self.photo)], check=True)
+        rescanned = self.service.scan()["assets"]
+        self.assertEqual([asset["asset_id"] for asset in rescanned], [asset_id])
+        self.assertFalse(rescanned[0]["hero_tag_removed"])
+
     def test_legacy_event_folder_without_json_uses_folder_metadata(self):
         (self.event / "Data" / "metadata.json").unlink()
         with patch.object(HeroLibraryService, "_finder_tags", return_value=["Hero Shot"]):
@@ -395,6 +417,36 @@ class HeroLibraryTests(unittest.TestCase):
         with patch("PIL.Image.open", side_effect=AssertionError("audit opened an image")):
             audit = self.service.audit_drive()
         self.assertEqual(audit["uncatalogued"], ["Staff Uploads/new.jpg"])
+
+    def test_section_review_lists_unmatched_files_and_routes_catalogued_pairs(self):
+        (self.event / "Data" / "metadata.json").write_text("{}")
+        with patch.object(HeroLibraryService, "_finder_tags", return_value=["Hero Shot"]):
+            asset_id = self.service.scan()["assets"][0]["asset_id"]
+        result = self.service.push_originals([asset_id])
+        self.assertEqual(result["errors"], [])
+        asset = result["assets"][0]
+        old_master, old_web = Path(asset["master_path"]), Path(asset["web_path"])
+        self.assertEqual(old_master.parent.name, "Section To Review")
+        self.assertEqual(old_web.parent.name, "Section To Review")
+        unmatched = old_web.with_name("unmatched.jpg")
+        unmatched.write_bytes(b"do not open")
+        unrelated = self.publish_root / "WEB" / "unrelated.jpg"
+        unrelated.write_bytes(b"outside section review")
+        with patch("PIL.Image.open", side_effect=AssertionError("review scan opened an image")):
+            self.assertEqual(self.service.audit_drive(section_review=True)["uncatalogued"],
+                             [str(unmatched.relative_to(self.publish_root))])
+
+        result = self.service.update_with_summary([asset_id], {"sections": ["PYP"]})
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["organized"], 1)
+        updated = result["assets"][0]
+        for key in ("master_path", "web_path"):
+            path = Path(updated[key])
+            self.assertEqual(path.parent.name, "Primary School")
+            self.assertTrue(path.is_file())
+        self.assertFalse(old_master.exists())
+        self.assertFalse(old_web.exists())
+        self.assertEqual(unmatched.read_bytes(), b"do not open")
 
     def test_staff_photo_can_be_adopted_without_download_then_staged_in_batch(self):
         staff = self.publish_root / "Staff Uploads" / "new.jpg"

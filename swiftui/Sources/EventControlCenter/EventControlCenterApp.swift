@@ -315,6 +315,14 @@ final class AppState: ObservableObject {
         return result
     }
 
+    func heroUntag(ids: [String]) async -> HeroUntagResponse? {
+        var result: HeroUntagResponse?
+        await perform(showSuccess: false) {
+            result = try await self.request("hero_untag", payload: HeroIDsPayload(assetIds: ids))
+        }
+        return result
+    }
+
     func heroStage(ids: [String]) async -> [HeroAsset]? {
         var result: HeroAssetsResponse?
         await perform(showSuccess: false) {
@@ -371,10 +379,11 @@ final class AppState: ObservableObject {
         return result
     }
 
-    func heroAuditDrive() async -> HeroDriveAuditResponse? {
+    func heroAuditDrive(sectionReview: Bool = false) async -> HeroDriveAuditResponse? {
+        struct Payload: Codable { let sectionReview: Bool }
         var result: HeroDriveAuditResponse?
         await perform(showSuccess: false) {
-            result = try await self.request("hero_audit_drive", payload: EmptyPayload())
+            result = try await self.request("hero_audit_drive", payload: Payload(sectionReview: sectionReview))
         }
         return result
     }

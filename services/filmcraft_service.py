@@ -21,8 +21,8 @@ from uuid import uuid4
 
 from config.config import AppConfig
 from services.filmcraft_client import FilmcraftClient
-from services.filmcraft_media import capture_time, photo_intermediate
-from services.importer import PHOTO_EXTENSIONS, VIDEO_EXTENSIONS, is_system_file
+from services.filmcraft_media import capture_time
+from services.importer import VIDEO_EXTENSIONS, is_system_file
 from services.media_identity import atomic_json, media_identity, same_content
 from services.project_service import legacy_filmcraft_path
 from services.social_video_service import SocialVideoService
@@ -127,7 +127,8 @@ class FilmcraftService:
             project["root"]["children"] = []
             document["view"] = {"open_sequences": [], "active_sequence": None, "sequences": {}}
         project["settings"]["default_still_duration"] = 3 * TICKS
-        records = state.get("assets", {})
+        records = {path: record for path, record in state.get("assets", {}).items()
+                   if Path(path).is_relative_to(Path("Raw/Videos"))}
         metadata_path = event / "Data" / "metadata.json"
         event_metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
         fps = float(event_metadata.get("filmcraft_frame_rate", 30))
@@ -137,17 +138,16 @@ class FilmcraftService:
         assets = []
         claimed = set()
         inventory = {}
-        files = sorted(p for name in ("Photos", "Videos") for p in (event / "Raw" / name).rglob("*")
-                       if p.is_file() and not is_system_file(p) and p.suffix.casefold() in PHOTO_EXTENSIONS | VIDEO_EXTENSIONS)
+        files = sorted(p for p in (event / "Raw" / "Videos").rglob("*")
+                       if p.is_file() and not is_system_file(p) and p.suffix.casefold() in VIDEO_EXTENSIONS)
         for index, source in enumerate(files, 1):
             relative = str(source.relative_to(event))
-            kind = "video" if source.is_relative_to(event / "Raw" / "Videos") else "photo"
             emit("Inspecting original event media…", index, len(files))
             old = records.get(relative, {})
             try:
                 identity = media_identity(source, old.get("signature"))
-                proxy = SocialVideoService.destination_for(source, event) if kind == "video" else None
-                proxy_signature = media_identity(proxy, old.get("proxy_signature")) if proxy and proxy.is_file() else None
+                proxy = SocialVideoService.destination_for(source, event)
+                proxy_signature = media_identity(proxy, old.get("proxy_signature")) if proxy.is_file() else None
                 inventory[relative] = {"source": identity, "proxy": proxy_signature}
                 if not old:
                     # A renamed original keeps its UUID when its previous path no
@@ -156,26 +156,12 @@ class FilmcraftService:
                     if len(matches) == 1:
                         old = matches[0]
                 asset = copy.deepcopy(old) if old and same_content(identity, old.get("signature", {})) else {}
-                asset.update({"relative": relative, "kind": kind, "signature": identity, "proxy_signature": proxy_signature})
+                asset.update({"relative": relative, "kind": "video", "signature": identity, "proxy_signature": proxy_signature})
                 asset.pop("missing", None)
-                if asset.get("representation"):
-                    representation = event / asset["representation"]
-                    previous_representation = asset.get("representation_signature")
-                    current_representation = media_identity(representation, previous_representation) if representation.is_file() else None
-                    asset["representation_signature"] = current_representation
-                    if previous_representation and current_representation and not same_content(previous_representation, current_representation):
-                        # Preserve a modified intermediate and every user sequence
-                        # referencing it. The refreshed assembly gets a new version.
-                        asset.pop("item", None)
-                        asset.pop("representation", None)
-                        asset.pop("representation_signature", None)
-                        asset["uuid"] = uuid4().hex
-                        asset["force_new"] = True
-                        summary.warnings.append(f"Preserved a changed photo intermediate for {relative}; creating a fresh full-resolution representation.")
                 asset.setdefault("uuid", uuid4().hex)
                 if not asset.get("capture_time") or state.get("capture_timezone") != event_metadata.get("capture_timezone") or old.get("signature", {}).get("mtime_ns") != identity["mtime_ns"]:
                     hint = hints.get(relative, {})
-                    when, method = capture_time(source, kind, hint.get("capture_time"), event_metadata.get("capture_timezone"))
+                    when, method = capture_time(source, "video", hint.get("capture_time"), event_metadata.get("capture_timezone"))
                     asset.update(capture_time=when, capture_method=method, original_name=hint.get("original_name", source.name))
                 assets.append(asset)
                 claimed.add(asset["uuid"])
@@ -191,13 +177,12 @@ class FilmcraftService:
             manifest = event / "Data" / "smaller_video_manifest.json"
             return _digest({"files": inventory, "fps": fps, "timezone": event_metadata.get("capture_timezone"),
                             "name": event_metadata.get("event_name"),
-                            "representations": {a["relative"]: a.get("representation_signature") for a in assets if a.get("representation")},
                             "proxy_manifest": hashlib.sha256(manifest.read_bytes()).hexdigest() if manifest.exists() else None,
-                            "assembly_version": 4})
+                            "assembly_version": 5})
         signature = input_signature()
         if (not summary.failures and source_project.parent == canonical.parent
             and state.get("input_signature") == signature and state.get("project_hash") == original_hash
-            and all((event / a.get("representation", a["relative"])).is_file() for a in assets)):
+            and all((event / a["relative"]).is_file() for a in assets)):
             cached = state["summary"]
             for key, value in cached.items():
                 setattr(summary, key, value)
@@ -212,7 +197,6 @@ class FilmcraftService:
         project = document["project"]
         media_bin = self._bin(project, "Media")
         video_bin = self._bin(project, "Videos", media_bin)
-        photo_bin = self._bin(project, "Photos", media_bin)
         timeline_bin = self._bin(project, "Timelines")
         # A first import can replace only the blank file created by this same
         # import operation. Every later change is a fresh, recoverable project.
@@ -227,7 +211,7 @@ class FilmcraftService:
                 pending = []
                 for asset in assets:
                     item = project["items"].get(str(asset.get("item")))
-                    if item is None and not asset.get("force_new"):
+                    if item is None:
                         source_path = str((event / asset["relative"]).resolve())
                         candidates = [entry for entry in project["items"].values() if _media(entry) and (
                             _media(entry).get("media", {}).get("File", {}).get("path") == source_path
@@ -245,51 +229,23 @@ class FilmcraftService:
                                     document = json.loads(draft.read_text()); project = document["project"]
                                     asset["item"] = candidate["id"]
                                     asset["uuid"] = candidate.get("metadata", {}).get("ECC Asset ID") or asset["uuid"]
-                                    if linked != source_path and Path(linked).is_relative_to(event):
-                                        asset["representation"] = str(Path(linked).relative_to(event))
                                     item = project["items"][str(asset["item"])]
-                    expected = str((event / asset.get("representation", asset["relative"])).resolve())
+                    expected = str((event / asset["relative"]).resolve())
                     found = _media(item or {})
                     if found:
                         stored = found.get("media", {}).get("File", {}).get("path")
                         # A portable identity, not just a filename, established
                         # that this is a renamed original.
-                        if stored and not Path(stored).exists() and not asset.get("missing") and not asset.get("representation"):
+                        if stored and not Path(stored).exists() and not asset.get("missing"):
                             found["media"]["File"]["path"] = expected
                             stored = expected
                         if stored == expected:
-                            if asset.get("representation") and not Path(expected).is_file() and not asset.get("missing"):
-                                photo_intermediate(event / asset["relative"], Path(expected))
                             continue
-                    if asset.get("missing"):
-                        continue
-                    source = event / asset["relative"]
-                    emit("Importing original video media…" if asset["kind"] == "video" else "Importing photos…")
-                    try:
-                        if asset["kind"] == "photo":
-                            try:
-                                info = client.probe(source, temporary)
-                                # Compare the engine's dimensions with oriented EXIF
-                                # dimensions; do not leave a sideways still in an edit.
-                                from PIL import Image
-                                with Image.open(source) as image:
-                                    w, h = image.size
-                                    if image.getexif().get(274) in (5, 6, 7, 8):
-                                        w, h = h, w
-                                    if (info["video"]["width"], info["video"]["height"]) != (w, h):
-                                        raise ValueError("Photo needs EXIF orientation normalization")
-                            except Exception:
-                                representation = folder / "Photo Intermediates" / f"{asset['uuid']}.png"
-                                if not representation.is_file():
-                                    photo_intermediate(source, representation)
-                                asset["representation"] = str(representation.relative_to(event))
-                                source = representation
-                        pending.append((asset, source))
-                    except Exception as exc:
-                        summary.failures.append(f"{asset['relative']}: {exc}")
+                    if not asset.get("missing"):
+                        pending.append((asset, event / asset["relative"]))
                 for begin in range(0, len(pending), 20):
                     batch = pending[begin:begin + 20]
-                    rows = client.run(draft, [_step("file.import", paths=[str(path)], bin=video_bin["id"] if a["kind"] == "video" else photo_bin["id"], imageSequence=False) for a, path in batch], temporary)
+                    rows = client.run(draft, [_step("file.import", paths=[str(path)], bin=video_bin["id"], imageSequence=False) for _, path in batch], temporary)
                     document = json.loads(draft.read_text()); project = document["project"]
                     for (asset, _), row in zip(batch, rows):
                         ids = row.get("result", {}).get("items", [])
@@ -306,9 +262,6 @@ class FilmcraftService:
                     if not asset.get("project_name") or item["name"] == asset["project_name"]:
                         item["name"] = asset["original_name"]
                     asset["project_name"] = item["name"]
-                    if asset.get("representation"):
-                        asset["representation_signature"] = media_identity(event / asset["representation"])
-                    asset.pop("force_new", None)
                     item.setdefault("metadata", {}).update({"ECC Asset ID": asset["uuid"], "Original Filename": asset["original_name"],
                                                            "Original File": asset["relative"], "Capture Time": asset["capture_time"],
                                                            "Capture Time Source": asset["capture_method"],
@@ -316,13 +269,9 @@ class FilmcraftService:
                     active.append(asset)
                 active.sort(key=lambda a: (a["capture_time"], a["original_name"].casefold(), a["relative"], a["uuid"]))
                 atomic_json(draft, document)
-                organization = []
-                for kind, destination_bin in (("video", video_bin), ("photo", photo_bin)):
-                    identifiers = [asset["item"] for asset in active if asset["kind"] == kind]
-                    if identifiers:
-                        organization.append(_step("project.moveToBin", items=identifiers, bin=destination_bin["id"]))
-                if organization:
-                    rows = client.run(draft, organization, temporary)
+                if active:
+                    rows = client.run(draft, [_step("project.moveToBin", items=[asset["item"] for asset in active],
+                                                   bin=video_bin["id"])], temporary)
                     if any(not row.get("ok") for row in rows):
                         raise ValueError("FilmCraft could not organize the original media bins.")
                     document = json.loads(draft.read_text())
@@ -332,8 +281,6 @@ class FilmcraftService:
                 except (OSError, ValueError):
                     proxy_records = {}
                 for index, asset in enumerate(active, 1):
-                    if asset["kind"] != "video":
-                        continue
                     emit("Linking compressed video proxies…", index, len(active))
                     original = event / asset["relative"]
                     proxy = SocialVideoService.destination_for(original, event)
@@ -382,11 +329,10 @@ class FilmcraftService:
                         atomic_json(draft, document)
 
                 document = json.loads(draft.read_text()); project = document["project"]
-                videos = [asset for asset in active if asset["kind"] == "video"]
                 timeline_signature = _digest([fps, PROFILES, [
                     [asset["item"], asset["signature"]["fingerprint"],
                      _media(project["items"][str(asset["item"])])["info"]]
-                    for asset in videos
+                    for asset in active
                 ]])
                 tracked = {}
                 for name, width, height in PROFILES:
@@ -433,7 +379,7 @@ class FilmcraftService:
                     steps = [_step("sequence.open", item=sequence_id)]
                     frame_rate = item["kind"]["Sequence"]["settings"]["frame_rate"]
                     frame_duration = Fraction(TICKS * frame_rate["den"], frame_rate["num"])
-                    for asset in videos:
+                    for asset in active:
                         info = _media(project["items"][str(asset["item"])])["info"]
                         duration = int(info["duration"])
                         if duration <= 0:
@@ -446,7 +392,7 @@ class FilmcraftService:
                         raise ValueError("; ".join(str(p) for p in problems))
                     document = json.loads(draft.read_text()); project = document["project"]
                     item = project["items"][str(sequence_id)]
-                    self._finish_sequence(project, item["kind"]["Sequence"], videos, width, height)
+                    self._finish_sequence(project, item["kind"]["Sequence"], active, width, height)
                     # Move only this sequence's reference, leaving other user bins
                     # and sequences intact.
                     self._remove_reference(project["root"], sequence_id)
@@ -473,9 +419,7 @@ class FilmcraftService:
                 else:
                     os.link(draft, target)
                 summary.project_path = str(target)
-                summary.videos = sum(a["kind"] == "video" for a in active)
-                summary.photos = sum(a["kind"] == "photo" for a in active)
-                summary.intermediate_photos = sum("representation" in a for a in active)
+                summary.videos = len(active)
                 if any("assumed" in a["capture_method"] for a in active):
                     summary.warnings.append("Capture times without a timezone use metadata.json capture_timezone, or this Mac's local timezone when unset.")
                 if any(a["capture_method"] == "Filesystem modification time" for a in active):
