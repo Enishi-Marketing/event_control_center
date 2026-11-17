@@ -219,6 +219,24 @@ class ImportSafetyTests(unittest.TestCase):
         self.assertEqual(result.deleted, 1)
         self.assertTrue((self.source / ".DS_Store").exists())
 
+    def test_macos_volume_trash_does_not_block_cleanup(self):
+        trashed = self.source / ".Trashes" / "trashed.JPG"
+        trashed.parent.mkdir()
+        trashed.write_bytes(b"trashed photo")
+        nested = self.source / "DCIM" / ".Trashes" / "nested.JPG"
+        nested.parent.mkdir(parents=True)
+        nested.write_bytes(b"photo in an ordinary folder")
+
+        with patch("services.importer.platform.system", return_value="Darwin"), patch.object(
+            Path, "is_mount", return_value=True
+        ):
+            scan, summary, check = self.ready(("one.JPG",))
+            self.assertEqual({item.path for item in scan.files}, {self.source / "one.JPG", nested})
+            result, _ = self.cleanup(summary, check)
+
+        self.assertEqual(result.deleted, 2)
+        self.assertTrue(trashed.is_file())
+
     def test_camera_bookkeeping_is_not_imported_and_does_not_block_cleanup(self):
         names = (
             "NIKON001.DSC", "DCIM/CANONMSC/M3100.CTG",

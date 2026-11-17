@@ -1,5 +1,6 @@
 import hashlib
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -429,6 +430,14 @@ class ImportService:
         for folder, directories, filenames in os.walk(
             source, onerror=lambda exc: failures.append(str(exc)), followlinks=False
         ):
+            # macOS protects the volume's Trash even when camera folders are readable.
+            if (
+                ".Trashes" in directories
+                and Path(folder) == source
+                and platform.system() == "Darwin"
+                and source.is_mount()
+            ):
+                directories.remove(".Trashes")
             for name in directories:
                 path = Path(folder) / name
                 if path.is_symlink():
